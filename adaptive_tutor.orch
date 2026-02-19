@@ -1,0 +1,29 @@
+@orchid 0.1
+@name "Adaptive Tutor"
+@description "Interactive tutoring agent that classifies student comprehension and adapts its teaching strategy."
+
+agent Tutor(subject, student_level="intermediate"):
+    ## Assess starting point
+    assessment := Socratic("$subject fundamentals")
+
+    ## Adapt to student
+    until student_signals_done:
+        question := listen()
+
+        understanding := Classify(question, [
+            "conceptual_confusion",
+            "wants_deeper_detail",
+            "needs_analogy",
+            "ready_to_advance"
+        ])
+
+        if understanding == "conceptual_confusion":
+            ELI5(question) >> Analogize(_, domain="everyday life")
+        elif understanding == "wants_deeper_detail":
+            CoT(question)<deep> >> Formal(_)
+        elif understanding == "needs_analogy":
+            Analogize(question)
+            Ground(_)
+        elif understanding == "ready_to_advance":
+            next_topic := CoT("what should $student_level learn next about $subject")
+            Socratic(next_topic)

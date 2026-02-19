@@ -1,0 +1,35 @@
+@orchid 0.1
+@name "Threat Model Generator"
+@description "STRIDE-based threat modeling with parallel threat generation and mitigation."
+@requires MCP("filesystem")
+
+Use MCP("filesystem") as fs
+
+macro ThreatModel(system_description):
+    ## Map the attack surface
+    components := Decompose("components and interfaces of $system_description")
+    surface := CoT("identify entry points and trust boundaries in $components")
+
+    ## Generate threats (STRIDE-based)
+    threats := fork:
+        spoofing: RedTeam("spoofing attacks against $surface")
+        tampering: RedTeam("tampering attacks against $surface")
+        repudiation: RedTeam("repudiation risks in $surface")
+        info_disc: RedTeam("information disclosure in $surface")
+        dos: RedTeam("denial of service against $surface")
+        priv_esc: RedTeam("privilege escalation in $surface")
+
+    ## Assess and prioritize
+    all_threats := Synthesize(threats)
+    ranked := Prioritize(all_threats, criteria="likelihood * impact")
+
+    ## Generate mitigations
+    mitigations := CoT("concrete mitigations for top 10 threats in $ranked")
+    mitigations := Validate(mitigations, criteria="each threat has at least one mitigation")
+
+    return Formal(ranked + mitigations)
+
+# Run against a system
+spec := fs:Read("docs/architecture.md")
+report := ThreatModel(spec)
+fs:Write("security/threat_model.md", report)

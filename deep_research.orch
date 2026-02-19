@@ -1,0 +1,29 @@
+@orchid 0.1
+@name "Deep Research Agent"
+@description "Research agent with iterative refinement, self-critique, and citation."
+
+agent DeepResearch(question):
+    ## Decompose
+    sub_questions := Decompose(question)
+
+    ## Investigate each sub-question in parallel
+    findings := fork:
+        for q in sub_questions:
+            Search("$q") >> CoVe >> Extract(_, schema="claims_with_evidence")
+
+    ## Synthesize and critique
+    draft := Synthesize(findings)
+    holes := Critique(draft)
+
+    ## Fill gaps (bounded to prevent infinite loops)
+    until Validate(draft, criteria="all sub-questions addressed")<retry=5>:
+        supplemental := Search("$holes")<deep>
+        draft := Refine(draft + supplemental)
+        holes := Critique(draft)
+
+    ## Final output
+    Steelman(draft)
+    return Formal(draft)<cite>
+
+# Run it
+report := DeepResearch("What are the technical barriers to room-temperature superconductors?")

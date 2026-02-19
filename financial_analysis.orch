@@ -1,0 +1,45 @@
+@orchid 0.1
+@name "NVDA Deep Dive"
+@description "Multi-phase stock analysis with adversarial review and confidence gating."
+@requires MCP("financial-data"), MCP("news-api"), MCP("filesystem")
+
+Use MCP("financial-data") as fin
+Use MCP("news-api") as news
+Use MCP("filesystem") as fs
+
+###
+## Phase 1: Data Collection
+try:
+    prices := fin:Historical("NVDA", days=90)
+except DataUnavailable:
+    prices := fin:Historical("NVDA", days=30)<best_effort>
+
+headlines := news:Search("NVIDIA semiconductor AI chips")
+filings := news:Search("NVIDIA SEC filing 10-K 10-Q")
+
+## Phase 2: Multi-Angle Analysis
+trends := CoT("analyze price patterns and momentum in $prices")
+sentiment := CoT("analyze market sentiment from $headlines")
+fundamentals := CoT("extract key financial metrics from $filings")
+
+## Phase 3: Synthesis
+combined := trends + sentiment + fundamentals
+analysis := Consensus(combined)
+
+## Phase 4: Adversarial Review
+weaknesses := RedTeam(analysis)
+refined := Reconcile(analysis + weaknesses)
+
+## Phase 5: Confidence-Gated Output
+confidence := Confidence()
+
+if confidence > 0.8:
+    thesis := Formal(refined)
+elif confidence > 0.5:
+    thesis := ELI5(refined) + Explain("key uncertainty areas")
+else:
+    thesis := Debate[3]("bull case vs bear case vs neutral")
+    thesis += Creative("what additional data would resolve uncertainty")
+
+fs:Write("analysis/nvda_report.md", thesis)<private>
+###

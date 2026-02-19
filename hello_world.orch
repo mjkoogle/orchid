@@ -1,0 +1,18 @@
+@orchid 0.1
+@name "Hello World"
+@description "Minimal Orchid example: search, reason, present."
+
+# Search for a topic
+results := Search("latest breakthroughs in fusion energy")
+
+# Verify the claims
+vetted := CoVe(results)
+
+# Think step-by-step about what we found
+analysis := CoT("summarize the key developments in $vetted")
+
+# Choose output based on confidence
+if Confidence(analysis) > 0.7:
+    Formal(analysis)
+else:
+    ELI5(analysis)
