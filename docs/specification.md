@@ -590,9 +590,15 @@ else:
 Orchid has two mechanisms for extending functionality beyond the core language:
 
 - **MCP** — connects to external tool servers that speak the Model Context Protocol. These are running processes (databases, APIs, file systems) that provide tools over a transport layer. Think of MCP as *infrastructure integration*.
-- **Plugin** — imports reusable Orchid code packages (`.orch` files or directories) as namespaced modules. Plugins bundle agents, macros, and functions into a `namespace:Operation()` interface. Think of Plugins as *Orchid-native libraries*.
+- **Plugin** — runtime capability extensions that register named operations. Plugins are like skills: they run in-process, have access to the LLM provider, and expose operations through the `namespace:Operation()` interface. Think of Plugins as *skills that extend what Orchid can do*.
 
-The key difference: `import` merges bindings into the current scope, while `Use Plugin` keeps everything namespaced — `scraper:Extract(...)` instead of a bare `Extract(...)` call. Plugins can also declare their own MCP dependencies and permissions.
+The key differences between the three extension mechanisms:
+
+| Mechanism | What it is | Syntax | Scope |
+|-----------|-----------|--------|-------|
+| `import`  | Orchid code reuse | `import path as name` | Merges bindings into current scope |
+| `Use MCP` | External tool server | `Use MCP("name")` | Namespaced, runs out-of-process |
+| `Use Plugin` | Runtime capability | `Use Plugin("name")` | Namespaced, runs in-process with provider access |
 
 ### 9.1 Importing MCP Servers
 
@@ -604,47 +610,96 @@ Use MCP("slack")
 
 MCP servers are configured in `orchid.config.json` and connected at runtime. If a server is not configured, the runtime warns and falls back to simulated calls.
 
-### 9.2 Importing Plugins
+### 9.2 Plugins
+
+Plugins are runtime capability extensions — modules that register named operations callable via `namespace:Operation()` syntax. Unlike MCP servers (external processes), plugins run in-process and have direct access to the LLM provider.
 
 ```orchid
+Use Plugin("sentiment") as s
 Use Plugin("web-scraper") as scraper
-Use Plugin("sentiment-analysis@~2.0")
 ```
 
-A plugin is an `.orch` file (or directory with an `index.orch`) that exports agents, macros, and functions. The runtime resolves plugins from:
+The runtime resolves plugins from:
 
 1. A `plugins/` directory relative to the script
 2. Paths listed in the `ORCHID_PLUGIN_PATH` environment variable
 
-Plugins are executed in isolation and their exported bindings are exposed through the namespace. Version constraints (e.g., `@~2.0`) are recorded for dependency tracking but not enforced by the runtime in v0.1.
+Plugins can be implemented in two ways:
 
-**Example plugin file** (`plugins/web-scraper.orch`):
-```orchid
-@orchid 0.1
-@name "Web Scraper Plugin"
-@description "Provides web scraping utilities as namespaced operations"
+#### JS/TS Plugins (Primary)
 
-agent Extract(url, selector):
-    """Extracts content from a web page matching the given selector."""
-    page := fetch(url)
-    result := CoT("Extract elements matching '$selector' from: $page")
-    return result
+JS/TS plugins implement the `OrchidPlugin` interface and have full access to the runtime context, including the LLM provider. This is the primary plugin mechanism — it lets plugins leverage the provider for reasoning, search, and tool dispatch.
 
-macro Summarize(url):
-    """Fetches a URL and returns a summary."""
-    content := Extract($url, "body")
-    -> CoT("Summarize this content concisely")
+```typescript
+// plugins/sentiment.js
+const plugin = {
+  name: 'sentiment',
+  description: 'Sentiment analysis operations',
 
-clean := fn(html):
-    return html.strip()
+  // Called once when the plugin is loaded
+  async setup(ctx) {
+    // Initialize resources, validate config, etc.
+  },
+
+  // Called when the interpreter shuts down
+  async teardown() {
+    // Cleanup resources
+  },
+
+  operations: {
+    async Analyze(args, ctx) {
+      const text = valueToString(args.arg0);
+      // Plugins can call back into the LLM provider
+      return ctx.provider.execute('Classify', text, {
+        categories: 'positive,negative,neutral'
+      }, ctx.tags);
+    },
+
+    async Score(args, ctx) {
+      const text = valueToString(args.arg0);
+      return ctx.provider.execute('Quantify', text, {
+        dimension: 'sentiment -1.0 to 1.0'
+      }, ctx.tags);
+    },
+  },
+};
+
+module.exports = plugin;
 ```
 
-**Using the plugin:**
-```orchid
-Use Plugin("web-scraper") as scraper
+**Plugin context** — every operation receives a `PluginContext` with:
+- `provider` — the LLM provider (call reasoning operations, search, etc.)
+- `implicitContext` — the current implicit context value (for pipe chains)
+- `tags` — any tags attached to the invocation
+- `trace(msg)` — emit a trace message
 
-headlines := scraper:Extract("https://example.com", "h1")
-summary := scraper:Summarize("https://example.com")
+#### .orch Plugins (Convenience)
+
+For simpler plugins that don't need provider access, `.orch` files work as a convenience. The file's exported agents and macros become the plugin's operations.
+
+```orchid
+# plugins/greeter.orch
+@orchid 0.1
+@name "Greeter Plugin"
+
+agent Greet(name):
+    return "Hello, $name!"
+
+macro Shout(message):
+    return "$message!!!"
+```
+
+#### Using Plugins
+
+Both JS and .orch plugins use the same `namespace:Operation()` invocation syntax:
+
+```orchid
+Use Plugin("sentiment") as s
+Use Plugin("greeter") as g
+
+label := s:Analyze("I love this product!")
+score := s:Score("The service was terrible")
+greeting := g:Greet("World")
 ```
 
 ### 9.3 Tool Invocation
@@ -656,7 +711,7 @@ data := fs:Read("/data/report.csv")
 analysis := CoT(data)
 postgres:Write("INSERT INTO reports VALUES ($analysis)")
 slack:Send("#team", "Analysis complete: $analysis")
-scraper:Extract("https://example.com", "headlines")
+s:Analyze("The quarterly results look promising")
 ```
 
 ### 9.4 Tool Discovery
@@ -677,9 +732,9 @@ if need_weather:
     Use MCP("weather-api")
     forecast := weather_api:Forecast(zip=90210)
 
-if need_scraping:
-    Use Plugin("web-scraper") as scraper
-    data := scraper:Extract(url, "main")
+if need_analysis:
+    Use Plugin("sentiment") as s
+    label := s:Analyze(text)
 ```
 
 ### 9.6 Tool Permissions
@@ -690,7 +745,6 @@ permissions:
     fs: [read]
     postgres: [read, write]
     slack: [send]
-    web_scraper: [fetch]
 ```
 
 ---

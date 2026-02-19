@@ -19,6 +19,7 @@ import {
 import { OrchidProvider, TagInfo } from './provider';
 import { BUILTIN_MACROS, META_OPERATIONS } from './builtins';
 import { MCPManager } from './mcp-manager';
+import { OrchidPlugin, PluginContext } from './plugin';
 
 /** Sentinel thrown to implement return statements. */
 class ReturnSignal {
@@ -49,13 +50,14 @@ export interface InterpreterOptions {
   scriptDir?: string;
 }
 
-/** A loaded Plugin module — an isolated Orchid interpreter with its own macros, agents, and bindings. */
-interface PluginModule {
-  interpreter: Interpreter;
-  macros: Map<string, AST.MacroDef>;
-  agents: Map<string, AST.AgentDef>;
-  env: Environment;
-}
+/**
+ * A loaded Plugin module. Two variants:
+ * - 'js': A JS/TS module implementing OrchidPlugin (skill-like capability extensions)
+ * - 'orch': An .orch file with exported agents/macros (convenience for simple plugins)
+ */
+type PluginModule =
+  | { kind: 'js'; plugin: OrchidPlugin }
+  | { kind: 'orch'; interpreter: Interpreter; macros: Map<string, AST.MacroDef>; agents: Map<string, AST.AgentDef>; env: Environment };
 
 export class Interpreter {
   private provider: OrchidProvider;
@@ -446,8 +448,7 @@ export class Interpreter {
 
   /**
    * Dispatch a namespace:Operation() call to a loaded Plugin module.
-   * Looks for a matching agent or macro in the plugin, then calls it
-   * using the plugin's own interpreter so it runs in the plugin's scope.
+   * Routes to either a JS plugin operation or an .orch plugin agent/macro.
    */
   private async dispatchPluginCall(
     plugin: PluginModule,
@@ -456,7 +457,32 @@ export class Interpreter {
   ): Promise<OrchidValue> {
     const opName = node.name;
 
-    // Check for agent first, then macro
+    // ── JS/TS plugin: call the named operation function ──
+    if (plugin.kind === 'js') {
+      const operation = plugin.plugin.operations[opName];
+      if (!operation) {
+        throw new OrchidError(
+          'ToolNotFound',
+          `Plugin "${node.namespace}" has no operation "${opName}"`,
+          node.position,
+        );
+      }
+
+      // Resolve arguments into a dict for the operation
+      const args: Record<string, OrchidValue> = {};
+      for (const arg of node.args) {
+        const val = await this.evaluate(arg.value, callerEnv);
+        args[arg.name || `arg${Object.keys(args).length}`] = val;
+      }
+
+      const tags = this.resolveTags(node.tags, callerEnv);
+      const ctx = this.makePluginContext(tags);
+      const result = await operation(args, ctx);
+      this.implicitContext = result;
+      return result;
+    }
+
+    // ── .orch plugin: dispatch to agent, macro, or callable ──
     if (plugin.agents.has(opName)) {
       const result = await plugin.interpreter.callAgent(
         plugin.agents.get(opName)!,
@@ -479,7 +505,6 @@ export class Interpreter {
       return result;
     }
 
-    // Check for a callable function in the plugin's environment
     const binding = plugin.env.get(opName);
     if (binding.kind === 'callable') {
       const result = await plugin.interpreter.callCallable(
@@ -982,14 +1007,19 @@ export class Interpreter {
   }
 
   /**
-   * Load a Plugin — an .orch file resolved from plugins/ or ORCHID_PLUGIN_PATH.
-   * The plugin is parsed and executed in isolation; its exported agents, macros,
-   * and functions are exposed through the namespace (alias:Operation).
+   * Load a Plugin — a runtime capability extension.
+   *
+   * Resolution order:
+   * 1. JS/TS modules: plugins/<name>.js, plugins/<name>/index.js
+   * 2. .orch files:   plugins/<name>.orch, plugins/<name>/index.orch
+   * 3. ORCHID_PLUGIN_PATH (same pattern in each directory)
+   *
+   * JS/TS plugins implement the OrchidPlugin interface and run in-process.
+   * .orch plugins are parsed and executed in isolation as a convenience.
    */
   private async loadPlugin(name: string, alias: string, position?: AST.Position): Promise<OrchidValue> {
-    // Resolve the plugin file
-    const pluginPath = this.resolvePluginPath(name);
-    if (!pluginPath) {
+    const resolved = this.resolvePluginPath(name);
+    if (!resolved) {
       throw new OrchidError(
         'ToolNotFound',
         `Plugin "${name}" not found. Searched in plugins/ directory and ORCHID_PLUGIN_PATH.`,
@@ -997,6 +1027,67 @@ export class Interpreter {
       );
     }
 
+    if (resolved.endsWith('.orch')) {
+      return this.loadOrchPlugin(name, alias, resolved, position);
+    }
+
+    return this.loadJsPlugin(name, alias, resolved, position);
+  }
+
+  /**
+   * Load a JS/TS plugin module that exports an OrchidPlugin.
+   */
+  private async loadJsPlugin(name: string, alias: string, pluginPath: string, position?: AST.Position): Promise<OrchidValue> {
+    let pluginExport: any;
+    try {
+      pluginExport = require(pluginPath);
+    } catch (e: any) {
+      throw new OrchidError(
+        'ToolNotFound',
+        `Failed to load plugin "${name}": ${e.message}`,
+        position,
+      );
+    }
+
+    // Support both default exports and module.exports
+    const plugin: OrchidPlugin = pluginExport.default ?? pluginExport;
+
+    if (!plugin.operations || typeof plugin.operations !== 'object') {
+      throw new OrchidError(
+        'ToolNotFound',
+        `Plugin "${name}" does not export a valid OrchidPlugin (missing operations).`,
+        position,
+      );
+    }
+
+    // Call setup if provided
+    if (plugin.setup) {
+      const ctx = this.makePluginContext([]);
+      try {
+        await plugin.setup(ctx);
+      } catch (e: any) {
+        throw new OrchidError(
+          'ToolNotFound',
+          `Plugin "${name}" setup failed: ${e.message}`,
+          position,
+        );
+      }
+    }
+
+    this.plugins.set(alias, { kind: 'js', plugin });
+
+    if (this.traceEnabled) {
+      const ops = Object.keys(plugin.operations).length;
+      this.trace(`Loaded Plugin "${name}" as "${alias}" (${ops} operations) [JS]`);
+    }
+
+    return orchidNull();
+  }
+
+  /**
+   * Load an .orch file as a plugin (convenience for simple plugins).
+   */
+  private async loadOrchPlugin(name: string, alias: string, pluginPath: string, position?: AST.Position): Promise<OrchidValue> {
     const source = fs.readFileSync(pluginPath, 'utf-8');
 
     let ast: AST.Program;
@@ -1013,7 +1104,6 @@ export class Interpreter {
       );
     }
 
-    // Execute the plugin in an isolated interpreter
     const pluginInterpreter = new Interpreter({
       provider: this.provider,
       trace: this.traceEnabled,
@@ -1031,8 +1121,8 @@ export class Interpreter {
       );
     }
 
-    // Store the plugin module for namespace dispatch
     this.plugins.set(alias, {
+      kind: 'orch',
       interpreter: pluginInterpreter,
       macros: pluginInterpreter.macros,
       agents: pluginInterpreter.agents,
@@ -1041,39 +1131,58 @@ export class Interpreter {
 
     if (this.traceEnabled) {
       const ops = pluginInterpreter.macros.size + pluginInterpreter.agents.size;
-      this.trace(`Loaded Plugin "${name}" as "${alias}" (${ops} operations)`);
+      this.trace(`Loaded Plugin "${name}" as "${alias}" (${ops} operations) [Orchid]`);
     }
 
     return orchidNull();
   }
 
   /**
+   * Build a PluginContext for JS plugin operations.
+   */
+  private makePluginContext(tags: TagInfo[]): PluginContext {
+    return {
+      provider: this.provider,
+      implicitContext: this.implicitContext,
+      trace: (msg: string) => this.trace(msg),
+      tags,
+    };
+  }
+
+  /**
    * Resolve a plugin name to a file path by searching:
-   * 1. plugins/<name>.orch relative to the script directory
-   * 2. plugins/<name>/index.orch relative to the script directory
-   * 3. Each directory in ORCHID_PLUGIN_PATH (colon-separated)
+   * 1. plugins/<name>.js (JS/TS module) relative to script directory
+   * 2. plugins/<name>/index.js (JS/TS directory module) relative to script directory
+   * 3. plugins/<name>.orch (.orch file) relative to script directory
+   * 4. plugins/<name>/index.orch (.orch directory) relative to script directory
+   * 5. Same patterns in each ORCHID_PLUGIN_PATH directory
+   *
+   * JS/TS plugins take priority over .orch plugins when both exist.
    */
   private resolvePluginPath(name: string): string | null {
-    const candidates: string[] = [];
+    const searchDirs: string[] = [
+      path.resolve(this.scriptDir, 'plugins'),
+    ];
 
-    // Search relative to script directory
-    candidates.push(path.resolve(this.scriptDir, 'plugins', `${name}.orch`));
-    candidates.push(path.resolve(this.scriptDir, 'plugins', name, 'index.orch'));
-
-    // Search ORCHID_PLUGIN_PATH
     const pluginPath = process.env.ORCHID_PLUGIN_PATH;
     if (pluginPath) {
       for (const dir of pluginPath.split(path.delimiter)) {
-        if (dir) {
-          candidates.push(path.resolve(dir, `${name}.orch`));
-          candidates.push(path.resolve(dir, name, 'index.orch'));
-        }
+        if (dir) searchDirs.push(path.resolve(dir));
       }
     }
 
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) {
-        return candidate;
+    // For each search directory, try JS first then .orch
+    for (const dir of searchDirs) {
+      const candidates = [
+        path.resolve(dir, `${name}.js`),
+        path.resolve(dir, name, 'index.js'),
+        path.resolve(dir, `${name}.orch`),
+        path.resolve(dir, name, 'index.orch'),
+      ];
+      for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
       }
     }
 
