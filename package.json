@@ -1,0 +1,25 @@
+{
+  "name": "orchid-lang",
+  "version": "0.1.0",
+  "description": "Orchid: A Cognitive Choreography Language for LLM Agent Orchestration",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "orchid": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest --forceExit",
+    "lint": "tsc --noEmit"
+  },
+  "keywords": ["orchid", "language", "ai", "agent", "orchestration", "llm"],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.11.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.2",
+    "typescript": "^5.3.3"
+  }
+}

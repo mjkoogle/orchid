@@ -7,3 +7,10 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Node
+node_modules/
+dist/
+
+# Test
+coverage/
