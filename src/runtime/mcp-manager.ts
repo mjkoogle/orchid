@@ -11,6 +11,7 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import {
   OrchidValue,
   orchidString,
@@ -54,7 +55,7 @@ export interface OrchidConfig {
 
 interface ConnectedServer {
   client: Client;
-  transport: StdioClientTransport;
+  transport: StdioClientTransport | StreamableHTTPClientTransport;
   tools: Map<string, MCPToolInfo>;
   config: MCPServerConfig;
 }
@@ -102,9 +103,7 @@ export class MCPManager {
     if (transportType === 'stdio') {
       await this.connectStdio(name, serverConfig);
     } else if (transportType === 'http') {
-      throw new MCPError(
-        `HTTP transport for MCP server "${name}" is not yet supported. Use stdio transport.`,
-      );
+      await this.connectHttp(name, serverConfig);
     } else {
       throw new MCPError(`Unknown transport type "${transportType}" for MCP server "${name}".`);
     }
@@ -253,6 +252,56 @@ export class MCPManager {
     } catch (error) {
       throw new MCPError(
         `Failed to connect to MCP server "${name}" (${config.command}): ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    // Discover tools
+    const tools = new Map<string, MCPToolInfo>();
+    try {
+      const toolsResult = await client.listTools();
+      for (const tool of toolsResult.tools) {
+        tools.set(tool.name, {
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema as Record<string, unknown>,
+        });
+      }
+      this.trace(`MCP server "${name}": discovered ${tools.size} tools: ${Array.from(tools.keys()).join(', ')}`);
+    } catch (error) {
+      this.trace(`MCP server "${name}": tool discovery failed (${error instanceof Error ? error.message : String(error)}), proceeding with no tools`);
+    }
+
+    this.servers.set(name, { client, transport, tools, config });
+  }
+
+  private async connectHttp(name: string, config: MCPServerConfig): Promise<void> {
+    if (!config.url) {
+      throw new MCPError(
+        `MCP server "${name}" is configured for HTTP transport but has no "url" specified.`,
+      );
+    }
+
+    this.trace(`Connecting to MCP server "${name}" via HTTP: ${config.url}`);
+
+    const url = new URL(config.url);
+    const requestInit: RequestInit | undefined = config.headers
+      ? { headers: config.headers }
+      : undefined;
+
+    const transport = new StreamableHTTPClientTransport(url, {
+      requestInit,
+    });
+
+    const client = new Client(
+      { name: `orchid-${name}`, version: '0.1.0' },
+    );
+
+    try {
+      await client.connect(transport);
+    } catch (error) {
+      throw new MCPError(
+        `Failed to connect to MCP server "${name}" (${config.url}): ` +
         `${error instanceof Error ? error.message : String(error)}`,
       );
     }

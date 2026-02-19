@@ -1,0 +1,24 @@
+@orchid 0.1
+@name "Data Types"
+
+# String interpolation
+name := "Orchid"
+greeting := "Hello from $name"
+Log(greeting)
+
+# List operations
+items := ["alpha", "beta", "gamma"]
+Log(len(items))
+
+# Dict
+config := {host: "localhost", port: 8080}
+Log(config.host)
+
+# Boolean
+flag := true
+if flag:
+    Log("flag is true")
+
+# Arithmetic
+result := 10 * 3 + 2
+Log(result)

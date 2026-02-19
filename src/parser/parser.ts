@@ -371,16 +371,17 @@ export class Parser {
   private parseImportStatement(): AST.ImportStatement {
     const pos = this.position();
     this.expect(TokenType.IMPORT);
-    // Path can be a series of identifiers separated by / and .
-    let path = this.expect(TokenType.IDENTIFIER).value;
-    while (this.match(TokenType.DOT)) {
-      path += '.' + this.expect(TokenType.IDENTIFIER).value;
-    }
-    // Handle path separators: check for / via IDENTIFIER patterns
-    // Actually the path might contain / which isn't a token. Let's handle it differently.
-    // For now, accept dot-separated or a string path
-    if (path.endsWith('.orch')) {
-      // already good
+
+    let path: string;
+
+    // Accept either a string literal path or dot-separated identifiers
+    if (this.check(TokenType.STRING)) {
+      path = this.advance().value;
+    } else {
+      path = this.expect(TokenType.IDENTIFIER).value;
+      while (this.match(TokenType.DOT)) {
+        path += '.' + this.expect(TokenType.IDENTIFIER).value;
+      }
     }
 
     let alias: string | undefined;

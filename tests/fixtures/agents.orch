@@ -1,0 +1,10 @@
+@orchid 0.1
+@name "Agents"
+
+agent Greeter(name):
+    """A simple greeter agent."""
+    greeting := "Hello, $name!"
+    return greeting
+
+result := Greeter("World")
+Log(result)

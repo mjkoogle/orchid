@@ -190,6 +190,7 @@ async function main(): Promise<void> {
       provider,
       trace: traceEnabled,
       mcpManager,
+      scriptDir: path.dirname(filePath),
     });
 
     const result = await interpreter.run(ast);

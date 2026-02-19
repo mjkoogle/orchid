@@ -51,12 +51,13 @@ export function parse(source: string) {
 export async function execute(
   source: string,
   provider?: OrchidProvider,
-  options?: { trace?: boolean },
+  options?: { trace?: boolean; scriptDir?: string },
 ): Promise<OrchidValue> {
   const ast = parse(source);
   const interpreter = new Interpreter({
     provider: provider || new ConsoleProvider(),
     trace: options?.trace,
+    scriptDir: options?.scriptDir,
   });
   return interpreter.run(ast);
 }

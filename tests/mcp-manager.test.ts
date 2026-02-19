@@ -97,16 +97,38 @@ describe('MCPManager', () => {
         .rejects.toThrow(/no "command" specified/);
     });
 
-    it('should throw for http transport (not yet supported)', async () => {
+    it('should throw for http transport with missing url', async () => {
       const config: OrchidConfig = {
         mcpServers: {
-          'remote': { transport: 'http', url: 'http://example.com/mcp' },
+          'remote': { transport: 'http' },
         },
       };
       const manager = new MCPManager(config);
 
       await expect(manager.connect('remote'))
-        .rejects.toThrow(/not yet supported/);
+        .rejects.toThrow(/no "url" specified/);
+    });
+
+    it('should accept http transport with valid url', async () => {
+      const config: OrchidConfig = {
+        mcpServers: {
+          'remote': { transport: 'http', url: 'http://127.0.0.1:1/mcp' },
+        },
+      };
+      const manager = new MCPManager(config);
+
+      // StreamableHTTPClientTransport uses lazy connection, so connect()
+      // may resolve even if the server isn't reachable. The important thing
+      // is that it doesn't throw "not yet supported" anymore.
+      try {
+        await manager.connect('remote');
+        // If it connected (lazy), clean up
+        await manager.disconnect('remote');
+      } catch (e: any) {
+        // Connection failure is acceptable here — we just verify it's not
+        // the old "not yet supported" error
+        expect(e.message).not.toMatch(/not yet supported/);
+      }
     });
   });
 

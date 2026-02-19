@@ -1,0 +1,3 @@
+double_val := 2
+triple_val := 3
+label := "math_helpers loaded"

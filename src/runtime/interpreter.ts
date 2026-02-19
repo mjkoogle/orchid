@@ -1,4 +1,8 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import * as AST from '../parser/ast';
+import { Lexer } from '../lexer/lexer';
+import { Parser } from '../parser/parser';
 import { Environment } from './environment';
 import {
   OrchidValue,
@@ -41,6 +45,8 @@ export interface InterpreterOptions {
   trace?: boolean;
   /** Optional MCP manager for real tool connections. */
   mcpManager?: MCPManager;
+  /** Directory for resolving relative import paths. Defaults to cwd. */
+  scriptDir?: string;
 }
 
 export class Interpreter {
@@ -57,12 +63,15 @@ export class Interpreter {
   private traceLog: string[] = [];
   private macros: Map<string, AST.MacroDef> = new Map();
   private agents: Map<string, AST.AgentDef> = new Map();
+  private scriptDir: string;
+  private importCache: Map<string, Environment> = new Map();
 
   constructor(options: InterpreterOptions) {
     this.provider = options.provider;
     this.mcpManager = options.mcpManager;
     this.globalEnv = new Environment();
     this.traceEnabled = options.trace ?? false;
+    this.scriptDir = options.scriptDir ?? process.cwd();
   }
 
   async run(program: AST.Program): Promise<OrchidValue> {
@@ -893,8 +902,109 @@ export class Interpreter {
     if (this.traceEnabled) {
       this.trace(`Import: ${node.path}${node.alias ? ` as ${node.alias}` : ''}`);
     }
-    // Actual file-level import would require a module loader
+
+    // Resolve the file path
+    let importPath = node.path;
+    // Convert dot-separated module path to file path (e.g. utils.helpers → utils/helpers)
+    importPath = importPath.replace(/\./g, '/');
+    // Add .orch extension if not present
+    if (!importPath.endsWith('.orch')) {
+      importPath += '.orch';
+    }
+    const resolved = path.resolve(this.scriptDir, importPath);
+
+    // Check cache — avoid re-executing the same module
+    if (this.importCache.has(resolved)) {
+      const cachedEnv = this.importCache.get(resolved)!;
+      this.mergeImportedBindings(cachedEnv, node.alias, this.globalEnv);
+      return orchidNull();
+    }
+
+    // Read and parse the source
+    if (!fs.existsSync(resolved)) {
+      throw new OrchidError(
+        'ImportError',
+        `Module not found: ${resolved} (from import "${node.path}")`,
+        node.position,
+      );
+    }
+
+    const source = fs.readFileSync(resolved, 'utf-8');
+
+    let ast: AST.Program;
+    try {
+      const lexer = new Lexer(source);
+      const tokens = lexer.tokenize();
+      const parser = new Parser();
+      ast = parser.parse(tokens);
+    } catch (e: any) {
+      throw new OrchidError(
+        'ImportError',
+        `Failed to parse "${node.path}": ${e.message}`,
+        node.position,
+      );
+    }
+
+    // Execute the imported module in an isolated environment
+    const moduleInterpreter = new Interpreter({
+      provider: this.provider,
+      trace: this.traceEnabled,
+      mcpManager: this.mcpManager,
+      scriptDir: path.dirname(resolved),
+    });
+
+    try {
+      await moduleInterpreter.run(ast);
+    } catch (e: any) {
+      throw new OrchidError(
+        'ImportError',
+        `Error executing "${node.path}": ${e.message}`,
+        node.position,
+      );
+    }
+
+    // Cache and merge the module's exported bindings
+    const moduleEnv = moduleInterpreter.globalEnv;
+    this.importCache.set(resolved, moduleEnv);
+    this.mergeImportedBindings(moduleEnv, node.alias, this.globalEnv);
+
+    // Also import any macros/agents defined in the module
+    for (const [name, macro] of moduleInterpreter.macros) {
+      const prefixed = node.alias ? `${node.alias}_${name}` : name;
+      this.macros.set(prefixed, macro);
+    }
+    for (const [name, agent] of moduleInterpreter.agents) {
+      const prefixed = node.alias ? `${node.alias}_${name}` : name;
+      this.agents.set(prefixed, agent);
+    }
+
     return orchidNull();
+  }
+
+  /**
+   * Merge an imported module's top-level bindings into the target environment.
+   * If alias is given, bindings are prefixed as alias_name.
+   * Otherwise they're merged directly (like Python's `from x import *`).
+   */
+  private mergeImportedBindings(
+    moduleEnv: Environment,
+    alias: string | undefined,
+    targetEnv: Environment,
+  ): void {
+    const bindings = moduleEnv.getOwnBindings();
+    if (alias) {
+      // Create a dict with all module bindings accessible as alias.name
+      const entries = new Map<string, OrchidValue>();
+      for (const [name, value] of bindings) {
+        entries.set(name, value);
+      }
+      targetEnv.set(alias, orchidDict(entries));
+    } else {
+      // Merge all bindings directly
+      for (const [name, value] of bindings) {
+        targetEnv.set(name, value);
+      }
+    }
   }
 
   // ─── Expression Operators ──────────────────────────────
