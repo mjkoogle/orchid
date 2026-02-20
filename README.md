@@ -32,13 +32,14 @@ Read it aloud. You don't need to be a programmer to understand what this agent w
 ## Getting Started
 
 ```bash
-npm install && npm run build
+### Install from npm
+npm install -g orchid-lang
+orchid examples/hello_world.orch
 
-# Try it immediately (no API key needed — uses console provider)
+### From source
+git clone https://github.com/mjkoogle/orchid.git
+cd orchid && npm install && npm run build
 node dist/cli.js examples/hello_world.orch
-
-# With real LLM reasoning (needs ANTHROPIC_API_KEY)
-node dist/cli.js --provider claude examples/hello_world.orch
 ```
 
 See the [Quickstart guide](QUICKSTART.md) for MCP setup and more.
