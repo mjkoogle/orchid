@@ -31,12 +31,13 @@ Read it aloud. You don't need to be a programmer to understand what this agent w
 
 ## Getting Started
 
-```bash
 ### Install from npm
+```bash
 npm install -g orchid-lang
 orchid examples/hello_world.orch
-
+```
 ### From source
+```bash
 git clone https://github.com/mjkoogle/orchid.git
 cd orchid && npm install && npm run build
 node dist/cli.js examples/hello_world.orch
