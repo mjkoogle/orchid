@@ -1,35 +1,47 @@
 @orchid 0.1
 @name "Threat Model Generator"
-@description "STRIDE-based threat modeling with parallel threat generation and mitigation."
+@description "STRIDE-based threat modeling: read architecture docs, generate threats, write report."
 @requires MCP("filesystem")
 
-Use MCP("filesystem") as fs
+# ── Setup ──────────────────────────────────────────────────
+# Read the codebase to understand the system
+source_files := filesystem:search_files(path="src", pattern="*.ts")
+tree := filesystem:directory_tree(path="src")
+
+# Read core files for architecture understanding
+pkg := filesystem:read_text_file(path="package.json")
 
 macro ThreatModel(system_description):
-    ## Map the attack surface
+    """Generate a STRIDE-based threat model from a system description."""
+
+    # Map the attack surface
     components := Decompose("components and interfaces of $system_description")
-    surface := CoT("identify entry points and trust boundaries in $components")
+    surface := CoT("identify entry points, trust boundaries, and data flows in $components")
 
-    ## Generate threats (STRIDE-based)
+    # Generate threats per STRIDE category in parallel
     threats := fork:
-        spoofing: RedTeam("spoofing attacks against $surface")
-        tampering: RedTeam("tampering attacks against $surface")
-        repudiation: RedTeam("repudiation risks in $surface")
-        info_disc: RedTeam("information disclosure in $surface")
-        dos: RedTeam("denial of service against $surface")
-        priv_esc: RedTeam("privilege escalation in $surface")
+        spoofing: RedTeam("spoofing and authentication attacks against $surface")
+        tampering: RedTeam("data tampering attacks against $surface")
+        repudiation: RedTeam("repudiation and audit logging gaps in $surface")
+        info_disc: RedTeam("information disclosure and data leakage in $surface")
+        dos: RedTeam("denial of service vectors against $surface")
+        priv_esc: RedTeam("privilege escalation paths in $surface")
 
-    ## Assess and prioritize
+    # Synthesize and prioritize
     all_threats := Synthesize(threats)
-    ranked := Prioritize(all_threats, criteria="likelihood * impact")
+    ranked := CoT("rank these threats by likelihood * impact, top 10 first:\n$all_threats")
 
-    ## Generate mitigations
-    mitigations := CoT("concrete mitigations for top 10 threats in $ranked")
-    mitigations := Validate(mitigations, criteria="each threat has at least one mitigation")
+    # Generate mitigations
+    mitigations := CoT("for each of the top 10 threats, propose concrete mitigations:\n$ranked")
 
     return Formal(ranked + mitigations)
 
-# Run against a system
-spec := fs:Read("docs/architecture.md")
-report := ThreatModel(spec)
-fs:Write("security/threat_model.md", report)
+# ── Run ────────────────────────────────────────────────────
+system_desc := CoT("describe the architecture of this system based on its structure and package.json:\n$tree\n\n$pkg")
+report := ThreatModel(system_desc)
+
+# Save the report
+filesystem:write_file(path="/tmp/orchid-workspace/threat_model.md", content=report)
+Log("Threat model written to /tmp/orchid-workspace/threat_model.md")
+
+report

@@ -1,0 +1,38 @@
+{
+  "name": "orchid-lang",
+  "displayName": "Orchid Language",
+  "description": "Syntax highlighting for the Orchid cognitive choreography language",
+  "version": "0.1.0",
+  "publisher": "orchid-lang",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mjkoogle/orchid.git"
+  },
+  "categories": ["Programming Languages"],
+  "keywords": ["orchid", "ai", "llm", "agent", "orchestration", "mcp"],
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "orchid",
+        "aliases": ["Orchid", "orchid"],
+        "extensions": [".orch"],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icon.png",
+          "dark": "./icon.png"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "orchid",
+        "scopeName": "source.orchid",
+        "path": "./syntaxes/orchid.tmLanguage.json"
+      }
+    ]
+  }
+}

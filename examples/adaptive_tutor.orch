@@ -1,29 +1,56 @@
 @orchid 0.1
 @name "Adaptive Tutor"
-@description "Interactive tutoring agent that classifies student comprehension and adapts its teaching strategy."
+@description "Assess a student's understanding, build a personalized lesson plan, and persist progress."
+@requires MCP("memory")
 
-agent Tutor(subject, student_level="intermediate"):
-    ## Assess starting point
-    assessment := Socratic("$subject fundamentals")
+# ── Configuration ─────────────────────────────────────────
+subject := "machine learning"
+student_name := "student_001"
 
-    ## Adapt to student
-    until student_signals_done:
-        question := listen()
+# ── Check Prior Knowledge ─────────────────────────────────
+# Look up any existing progress in the knowledge graph
+prior := memory:search_nodes(query="$student_name $subject")
+Log("Prior knowledge:")
+Log(prior)
 
-        understanding := Classify(question, [
-            "conceptual_confusion",
-            "wants_deeper_detail",
-            "needs_analogy",
-            "ready_to_advance"
-        ])
+# ── Assessment ────────────────────────────────────────────
+# Generate diagnostic questions based on subject
+diagnostic := Decompose("5 diagnostic questions to assess understanding of $subject fundamentals")
 
-        if understanding == "conceptual_confusion":
-            ELI5(question) >> Analogize(_, domain="everyday life")
-        elif understanding == "wants_deeper_detail":
-            CoT(question)<deep> >> Formal(_)
-        elif understanding == "needs_analogy":
-            Analogize(question)
-            Ground(_)
-        elif understanding == "ready_to_advance":
-            next_topic := CoT("what should $student_level learn next about $subject")
-            Socratic(next_topic)
+# Simulate answering the diagnostic (in a real system, the student would answer)
+assessment := CoT("given these diagnostic questions:\n$diagnostic\n\nClassify which areas a typical intermediate student would struggle with")
+
+understanding := Classify(assessment, [
+    "beginner - needs foundational concepts",
+    "intermediate - understands basics, needs depth",
+    "advanced - ready for cutting-edge topics"
+])
+
+Log("Student level: $understanding")
+
+# ── Generate Lesson Plan ──────────────────────────────────
+if understanding == "beginner - needs foundational concepts":
+    lesson := ELI5("$subject core concepts: what is a model, training, and inference")
+    lesson += Analogize(lesson, domain="everyday cooking recipes")
+elif understanding == "intermediate - understands basics, needs depth":
+    lesson := CoT("intermediate $subject curriculum: gradient descent, loss functions, overfitting")<deep>
+    lesson += CoT("practical exercises for each concept")
+else:
+    lesson := CoT("advanced $subject topics: transformers, attention mechanisms, RLHF")
+    lesson += CoT("recent research breakthroughs and open problems")
+
+# ── Critique and Refine ───────────────────────────────────
+gaps := Critique(lesson)
+lesson := Refine(lesson + gaps)
+
+# ── Persist Progress ──────────────────────────────────────
+# Store the student's current state in the knowledge graph
+entity := {name: "$student_name", entityType: "student", observations: ["subject: $subject", "level: $understanding", "lesson_completed: true"]}
+memory:create_entities(entities=[entity])
+
+relation := {from: "$student_name", to: "$subject", relationType: "is_studying"}
+memory:create_relations(relations=[relation])
+
+Log("Progress saved to knowledge graph")
+
+Formal(lesson)

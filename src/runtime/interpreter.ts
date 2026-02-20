@@ -20,6 +20,7 @@ import { OrchidProvider, TagInfo } from './provider';
 import { BUILTIN_MACROS, META_OPERATIONS } from './builtins';
 import { MCPManager } from './mcp-manager';
 import { OrchidPlugin, PluginContext } from './plugin';
+import { StatusReporter, SilentStatusReporter } from './status';
 
 /** Sentinel thrown to implement return statements. */
 class ReturnSignal {
@@ -48,6 +49,8 @@ export interface InterpreterOptions {
   mcpManager?: MCPManager;
   /** Directory for resolving relative import paths. Defaults to cwd. */
   scriptDir?: string;
+  /** Optional status reporter for live terminal feedback. */
+  status?: StatusReporter;
 }
 
 /**
@@ -67,6 +70,7 @@ export class Interpreter {
   private checkpoints: Map<string, { env: Map<string, OrchidValue>; context: OrchidValue }> = new Map();
   private eventHandlers: Map<string, { variable: string; body: AST.Node[]; env: Environment }[]> = new Map();
   private eventBuffer: Map<string, OrchidValue[]> = new Map();
+  private listenResolvers: ((event: OrchidValue) => void)[] = [];
   private namespaces: Map<string, string> = new Map(); // alias -> name
   private startTime = Date.now();
   private traceEnabled: boolean;
@@ -75,7 +79,9 @@ export class Interpreter {
   private agents: Map<string, AST.AgentDef> = new Map();
   private scriptDir: string;
   private importCache: Map<string, Environment> = new Map();
+  private importStack: Set<string> = new Set(); // tracks in-progress imports for cycle detection
   private plugins: Map<string, PluginModule> = new Map(); // alias -> loaded plugin
+  private status: StatusReporter;
 
   constructor(options: InterpreterOptions) {
     this.provider = options.provider;
@@ -83,6 +89,7 @@ export class Interpreter {
     this.globalEnv = new Environment();
     this.traceEnabled = options.trace ?? false;
     this.scriptDir = options.scriptDir ?? process.cwd();
+    this.status = options.status ?? new SilentStatusReporter();
   }
 
   async run(program: AST.Program): Promise<OrchidValue> {
@@ -102,6 +109,42 @@ export class Interpreter {
     return result;
   }
 
+  /**
+   * Shut down the interpreter and clean up all resources.
+   *
+   * Calls teardown() on all loaded JS plugins, giving them a chance to
+   * close connections, flush buffers, and release resources. This should
+   * be called when the interpreter is no longer needed (e.g., after script
+   * execution completes or on process exit).
+   */
+  async shutdown(): Promise<void> {
+    const errors: Error[] = [];
+
+    for (const [alias, plugin] of this.plugins) {
+      if (plugin.kind === 'js' && plugin.plugin.teardown) {
+        try {
+          await plugin.plugin.teardown();
+          if (this.traceEnabled) {
+            this.trace(`Plugin "${alias}" teardown complete.`);
+          }
+        } catch (e: any) {
+          errors.push(new Error(`Plugin "${alias}" teardown failed: ${e.message}`));
+          if (this.traceEnabled) {
+            this.trace(`Plugin "${alias}" teardown failed: ${e.message}`);
+          }
+        }
+      }
+    }
+
+    // Clear plugin references
+    this.plugins.clear();
+
+    // If any teardowns failed, log but don't throw — cleanup should be best-effort
+    if (errors.length > 0 && this.traceEnabled) {
+      this.trace(`${errors.length} plugin teardown(s) failed during shutdown.`);
+    }
+  }
+
   private async processMetadata(meta: AST.Metadata): Promise<void> {
     switch (meta.directive) {
       case 'orchid':
@@ -116,11 +159,60 @@ export class Interpreter {
         }
         break;
       case 'requires':
-        // Validate requirements would check provider capabilities
+        await this.validateRequires(meta);
         break;
       default:
         // Store as metadata
         break;
+    }
+  }
+
+  /**
+   * Validate @requires metadata directives.
+   *
+   * @requires MCP("filesystem") checks that the MCP server is configured.
+   * @requires Plugin("sentiment") checks that the plugin file is available.
+   * @requires MCP("a"), Plugin("b") validates a list of requirements.
+   */
+  private async validateRequires(meta: AST.Metadata): Promise<void> {
+    const nodes = meta.value.type === 'ListLiteral' ? meta.value.elements : [meta.value];
+
+    for (const node of nodes) {
+      if (node.type !== 'Operation') continue;
+
+      if (node.name === 'MCP') {
+        const serverName = node.args.length > 0 ? this.nodeToInputString(node.args[0].value) : '';
+        const available = this.mcpManager
+          ? (this.mcpManager.isConfigured(serverName) || this.mcpManager.hasServer(serverName))
+          : false;
+        if (!available) {
+          throw new OrchidError(
+            'ToolNotFound',
+            `Script requires MCP server "${serverName}" but it is not configured. ` +
+            `Run: orchid mcp install ${serverName}`,
+            meta.position,
+          );
+        }
+        if (this.traceEnabled) {
+          this.trace(`@requires MCP("${serverName}") — OK (configured)`);
+        }
+      }
+
+      if (node.name === 'Plugin') {
+        const pluginName = node.args.length > 0 ? this.nodeToInputString(node.args[0].value) : '';
+        const rawName = pluginName.replace(/@[^@]+$/, '');
+        const available = this.plugins.has(rawName) || this.resolvePluginPath(rawName) !== null;
+        if (!available) {
+          throw new OrchidError(
+            'ToolNotFound',
+            `Script requires plugin "${pluginName}" but it is not available.`,
+            meta.position,
+          );
+        }
+        if (this.traceEnabled) {
+          this.trace(`@requires Plugin("${pluginName}") — OK (available)`);
+        }
+      }
     }
   }
 
@@ -218,9 +310,9 @@ export class Interpreter {
       case 'ImplicitContext':
         return this.implicitContext;
       case 'ListenExpression':
-        return orchidNull(); // Placeholder — requires interactive runtime
+        return this.executeListen();
       case 'StreamExpression':
-        return this.evaluate(node.source, env);
+        return this.executeStream(node, env);
 
       default:
         throw new OrchidError('RuntimeError', `Unknown node type: ${(node as any).type}`, (node as any).position);
@@ -267,7 +359,7 @@ export class Interpreter {
 
   private async executeOperation(node: AST.Operation, env: Environment): Promise<OrchidValue> {
     const name = node.name;
-    const tags = this.resolveTags(node.tags, env);
+    const tags = await this.resolveTags(node.tags, env);
 
     // Check for user-defined macros/agents first
     if (this.macros.has(name)) {
@@ -287,15 +379,27 @@ export class Interpreter {
     if (name === 'Search') {
       const input = await this.resolveArgs(node.args, env);
       const query = input.length > 0 ? valueToString(input[0]) : valueToString(this.implicitContext);
-      const result = await this.provider.search(query, tags);
-      this.implicitContext = result;
-      return result;
+      this.status.start(`Search("${query.length > 50 ? query.slice(0, 47) + '...' : query}")`);
+      try {
+        const result = await this.withTimeout(
+          this.provider.search(query, tags),
+          tags, node.position,
+        );
+        this.status.succeed('Search complete');
+        this.implicitContext = result;
+        return result;
+      } catch (e) {
+        this.status.fail('Search failed');
+        throw e;
+      }
     }
 
     if (name === 'Confidence') {
       const input = await this.resolveArgs(node.args, env);
       const scope = input.length > 0 ? valueToString(input[0]) : undefined;
+      this.status.start('Assessing confidence...');
       const conf = await this.provider.confidence(scope);
+      this.status.succeed(`Confidence: ${conf}`);
       return orchidNumber(conf);
     }
 
@@ -377,8 +481,7 @@ export class Interpreter {
     if (name === 'Discover') {
       const input = await this.resolveArgs(node.args, env);
       const pattern = input.length > 0 ? valueToString(input[0]) : '*';
-      const available = Array.from(this.namespaces.keys());
-      return orchidList(available.map(n => orchidString(n)));
+      return this.executeDiscover(pattern);
     }
 
     // Generic built-in reasoning macros — delegate to provider
@@ -403,9 +506,19 @@ export class Interpreter {
         context['_count'] = valueToString(countVal);
       }
 
-      const result = await this.provider.execute(name, inputStr, context, tags);
-      this.implicitContext = result;
-      return result;
+      this.status.start(`${name}(...)`);
+      try {
+        const result = await this.withTimeout(
+          this.provider.execute(name, inputStr, context, tags),
+          tags, node.position,
+        );
+        this.status.succeed(`${name} done`);
+        this.implicitContext = result;
+        return result;
+      } catch (e) {
+        this.status.fail(`${name} failed`);
+        throw e;
+      }
     }
 
     // Unknown operation — try calling as a generic operation
@@ -413,13 +526,23 @@ export class Interpreter {
     const inputStr = input.length > 0
       ? valueToString(input[0])
       : valueToString(this.implicitContext);
-    const result = await this.provider.execute(name, inputStr, {}, tags);
-    this.implicitContext = result;
-    return result;
+    this.status.start(`${name}(...)`);
+    try {
+      const result = await this.withTimeout(
+        this.provider.execute(name, inputStr, {}, tags),
+        tags, node.position,
+      );
+      this.status.succeed(`${name} done`);
+      this.implicitContext = result;
+      return result;
+    } catch (e) {
+      this.status.fail(`${name} failed`);
+      throw e;
+    }
   }
 
   private async executeNamespacedOperation(node: AST.NamespacedOperation, env: Environment): Promise<OrchidValue> {
-    const tags = this.resolveTags(node.tags, env);
+    const tags = await this.resolveTags(node.tags, env);
 
     // Route to loaded Plugin if the namespace matches
     const plugin = this.plugins.get(node.namespace);
@@ -435,15 +558,46 @@ export class Interpreter {
 
     // Route to MCPManager if the namespace is a connected MCP server
     if (this.mcpManager?.hasServer(node.namespace)) {
-      const result = await this.mcpManager.callTool(node.namespace, node.name, args);
-      this.implicitContext = result;
-      return result;
+      this.status.start(`${node.namespace}:${node.name}(...)`);
+      try {
+        const result = await this.mcpManager.callTool(node.namespace, node.name, args);
+        this.status.succeed(`${node.namespace}:${node.name} done`);
+        this.implicitContext = result;
+        return result;
+      } catch (e) {
+        this.status.fail(`${node.namespace}:${node.name} failed`);
+        throw e;
+      }
+    }
+
+    // Auto-connect to configured MCP server on first use
+    if (this.mcpManager?.isConfigured(node.namespace)) {
+      if (this.traceEnabled) this.trace(`Auto-connecting MCP server: ${node.namespace}`);
+      this.status.start(`Connecting to ${node.namespace}...`);
+      await this.mcpManager.connect(node.namespace);
+      this.status.update(`${node.namespace}:${node.name}(...)`);
+      try {
+        const result = await this.mcpManager.callTool(node.namespace, node.name, args);
+        this.status.succeed(`${node.namespace}:${node.name} done`);
+        this.implicitContext = result;
+        return result;
+      } catch (e) {
+        this.status.fail(`${node.namespace}:${node.name} failed`);
+        throw e;
+      }
     }
 
     // Fallback to provider for non-MCP namespaces
-    const result = await this.provider.toolCall(node.namespace, node.name, args, tags);
-    this.implicitContext = result;
-    return result;
+    this.status.start(`${node.namespace}:${node.name}(...)`);
+    try {
+      const result = await this.provider.toolCall(node.namespace, node.name, args, tags);
+      this.status.succeed(`${node.namespace}:${node.name} done`);
+      this.implicitContext = result;
+      return result;
+    } catch (e) {
+      this.status.fail(`${node.namespace}:${node.name} failed`);
+      throw e;
+    }
   }
 
   /**
@@ -475,7 +629,7 @@ export class Interpreter {
         args[arg.name || `arg${Object.keys(args).length}`] = val;
       }
 
-      const tags = this.resolveTags(node.tags, callerEnv);
+      const tags = await this.resolveTags(node.tags, callerEnv);
       const ctx = this.makePluginContext(tags);
       const result = await operation(args, ctx);
       this.implicitContext = result;
@@ -483,11 +637,13 @@ export class Interpreter {
     }
 
     // ── .orch plugin: dispatch to agent, macro, or callable ──
+    const resolvedTags = await this.resolveTags(node.tags, callerEnv);
+
     if (plugin.agents.has(opName)) {
       const result = await plugin.interpreter.callAgent(
         plugin.agents.get(opName)!,
         node.args,
-        this.resolveTags(node.tags, callerEnv),
+        resolvedTags,
         callerEnv,
       );
       this.implicitContext = result;
@@ -498,7 +654,7 @@ export class Interpreter {
       const result = await plugin.interpreter.callMacro(
         plugin.macros.get(opName)!,
         node.args,
-        this.resolveTags(node.tags, callerEnv),
+        resolvedTags,
         callerEnv,
       );
       this.implicitContext = result;
@@ -510,7 +666,7 @@ export class Interpreter {
       const result = await plugin.interpreter.callCallable(
         binding,
         node.args,
-        this.resolveTags(node.tags, callerEnv),
+        resolvedTags,
         callerEnv,
       );
       this.implicitContext = result;
@@ -665,6 +821,43 @@ export class Interpreter {
   }
 
   private async executeRequire(node: AST.RequireStatement, env: Environment): Promise<OrchidValue> {
+    // Special handling for require MCP("name") and require Plugin("name")
+    if (node.condition.type === 'Operation') {
+      const opName = node.condition.name;
+
+      if (opName === 'MCP') {
+        const args = await this.resolveArgs(node.condition.args, env);
+        const serverName = args.length > 0 ? valueToString(args[0]) : '';
+        const available = this.mcpManager
+          ? (this.mcpManager.isConfigured(serverName) || this.mcpManager.hasServer(serverName))
+          : false;
+        if (!available) {
+          throw new OrchidError(
+            'ToolNotFound',
+            node.message || `Required MCP server "${serverName}" is not configured`,
+            node.position,
+          );
+        }
+        return orchidNull();
+      }
+
+      if (opName === 'Plugin') {
+        const args = await this.resolveArgs(node.condition.args, env);
+        const pluginName = args.length > 0 ? valueToString(args[0]) : '';
+        const loaded = this.plugins.has(pluginName);
+        const available = loaded || this.resolvePluginPath(pluginName.replace(/@[^@]+$/, '')) !== null;
+        if (!available) {
+          throw new OrchidError(
+            'ToolNotFound',
+            node.message || `Required plugin "${pluginName}" is not available`,
+            node.position,
+          );
+        }
+        return orchidNull();
+      }
+    }
+
+    // General require: evaluate condition as boolean
     const condition = await this.evaluate(node.condition, env);
     if (!isTruthy(condition)) {
       throw new OrchidError(
@@ -680,9 +873,15 @@ export class Interpreter {
 
   private async executeAtomicBlock(node: AST.AtomicBlock, env: Environment): Promise<OrchidValue> {
     // Atomic blocks execute in an isolated child environment.
-    // On success, bindings commit to parent. On failure, nothing leaks out.
+    // On success, bindings commit to parent. On failure, everything rolls back.
     const atomicEnv = env.child();
     const savedContext = this.implicitContext;
+
+    // Snapshot event state for rollback
+    const savedEventBuffer = this.snapshotEventBuffer();
+    const savedCheckpoints = new Map(this.checkpoints);
+    const savedEventHandlers = this.snapshotEventHandlers();
+    const savedListenResolvers = [...this.listenResolvers];
 
     try {
       let result: OrchidValue = orchidNull();
@@ -698,30 +897,59 @@ export class Interpreter {
         atomicEnv.commitToParent();
         throw e;
       }
-      // Rollback: restore context, don't commit bindings
+      // Full rollback: restore all interpreter state
       this.implicitContext = savedContext;
+      this.eventBuffer = savedEventBuffer;
+      this.checkpoints = savedCheckpoints;
+      this.eventHandlers = savedEventHandlers;
+      this.listenResolvers = savedListenResolvers;
+
+      if (this.traceEnabled) {
+        this.trace(`Atomic block rolled back: ${e instanceof Error ? e.message : String(e)}`);
+      }
+
       throw e;
     }
   }
 
+  /** Deep-copy the event buffer for atomic block rollback. */
+  private snapshotEventBuffer(): Map<string, OrchidValue[]> {
+    const snapshot = new Map<string, OrchidValue[]>();
+    for (const [key, values] of this.eventBuffer) {
+      snapshot.set(key, [...values]);
+    }
+    return snapshot;
+  }
+
+  /** Deep-copy the event handlers map for atomic block rollback. */
+  private snapshotEventHandlers(): Map<string, { variable: string; body: AST.Node[]; env: Environment }[]> {
+    const snapshot = new Map<string, { variable: string; body: AST.Node[]; env: Environment }[]>();
+    for (const [key, handlers] of this.eventHandlers) {
+      snapshot.set(key, [...handlers]);
+    }
+    return snapshot;
+  }
+
   private async executeFork(node: AST.ForkExpression, env: Environment): Promise<OrchidValue> {
+    // Snapshot the parent implicit context so each branch starts with the
+    // same state and doesn't observe another branch's intermediate results.
+    const parentContext = this.implicitContext;
+
     // Fork for-loop
     if (node.forLoop) {
       const iterable = await this.evaluate(node.forLoop.iterable, env);
       if (iterable.kind !== 'list') {
         throw new OrchidError('TypeError', 'Cannot iterate over non-list in fork', node.position);
       }
+      this.status.start(`fork: ${iterable.elements.length} iterations in parallel`);
       const results = await Promise.all(
         iterable.elements.map(async (element) => {
           const forkEnv = env.child();
           forkEnv.set(node.forLoop!.variable, element);
-          let result: OrchidValue = orchidNull();
-          for (const stmt of node.forLoop!.body) {
-            result = await this.execute(stmt, forkEnv);
-          }
-          return result;
+          return this.executeForkBranch(node.forLoop!.body, forkEnv, parentContext);
         })
       );
+      this.status.succeed(`fork: ${iterable.elements.length} iterations complete`);
       const result = orchidList(results);
       this.implicitContext = result;
       return result;
@@ -729,6 +957,11 @@ export class Interpreter {
 
     // Named or unnamed branches
     const isNamed = node.branches.some(b => b.name);
+    const branchCount = node.branches.length;
+    const branchLabel = isNamed
+      ? node.branches.map(b => b.name).join(', ')
+      : `${branchCount} branches`;
+    this.status.start(`fork: ${branchLabel} in parallel`);
 
     if (isNamed) {
       // Named fork → returns dict
@@ -736,16 +969,14 @@ export class Interpreter {
       const results = await Promise.all(
         node.branches.map(async (branch) => {
           const forkEnv = env.child();
-          let result: OrchidValue = orchidNull();
-          for (const stmt of branch.body) {
-            result = await this.execute(stmt, forkEnv);
-          }
-          return { name: branch.name!, value: result };
+          const value = await this.executeForkBranch(branch.body, forkEnv, parentContext);
+          return { name: branch.name!, value };
         })
       );
       for (const r of results) {
         entries.set(r.name, r.value);
       }
+      this.status.succeed(`fork: ${branchLabel} complete`);
       const result = orchidDict(entries);
       this.implicitContext = result;
       return result;
@@ -755,15 +986,40 @@ export class Interpreter {
     const results = await Promise.all(
       node.branches.map(async (branch) => {
         const forkEnv = env.child();
-        let result: OrchidValue = orchidNull();
-        for (const stmt of branch.body) {
-          result = await this.execute(stmt, forkEnv);
-        }
-        return result;
+        return this.executeForkBranch(branch.body, forkEnv, parentContext);
       })
     );
+    this.status.succeed(`fork: ${branchCount} branches complete`);
     const result = orchidList(results);
     this.implicitContext = result;
+    return result;
+  }
+
+  /**
+   * Execute a single fork branch with an isolated implicit context.
+   *
+   * Each branch starts with a snapshot of the parent's implicit context
+   * and restores its own local context before each statement. This prevents
+   * branches from observing each other's intermediate state when they
+   * interleave at async yield points under Promise.all.
+   */
+  private async executeForkBranch(
+    body: AST.Node[],
+    env: Environment,
+    parentContext: OrchidValue,
+  ): Promise<OrchidValue> {
+    let localContext = parentContext;
+    let result: OrchidValue = orchidNull();
+
+    for (const stmt of body) {
+      // Restore this branch's local context before each statement,
+      // in case another branch modified this.implicitContext.
+      this.implicitContext = localContext;
+      result = await this.execute(stmt, env);
+      // Capture the context after the statement completes.
+      localContext = this.implicitContext;
+    }
+
     return result;
   }
 
@@ -914,6 +1170,13 @@ export class Interpreter {
     const payload = node.payload ? await this.evaluate(node.payload, env) : orchidNull();
     const event: OrchidValue = { kind: 'event', name: node.event, payload };
 
+    // If there's a pending listen() waiter, resolve it immediately
+    if (this.listenResolvers.length > 0) {
+      const resolver = this.listenResolvers.shift()!;
+      resolver(event);
+      return orchidNull();
+    }
+
     // Dispatch to registered handlers
     const handlers = this.eventHandlers.get(node.event) || [];
     for (const handler of handlers) {
@@ -955,6 +1218,72 @@ export class Interpreter {
     this.eventBuffer.delete(node.event);
 
     return orchidNull();
+  }
+
+  /**
+   * listen() — consume the oldest buffered event across all event types.
+   *
+   * Per the spec (§10.5), listen() blocks until a single event is received.
+   * In this synchronous runtime, we consume from the event buffer. If no
+   * events are buffered, we resolve any pending listen waiters when the
+   * next event is emitted.
+   */
+  private async executeListen(): Promise<OrchidValue> {
+    // Check all event buffers for the oldest event
+    for (const [eventName, buffer] of this.eventBuffer) {
+      if (buffer.length > 0) {
+        const payload = buffer.shift()!;
+        // Clean up empty buffers
+        if (buffer.length === 0) {
+          this.eventBuffer.delete(eventName);
+        }
+        const event: OrchidValue = { kind: 'event', name: eventName, payload };
+        this.implicitContext = event;
+        return event;
+      }
+    }
+
+    // No buffered events — wait for the next emit.
+    // We create a promise that resolves when an event is emitted.
+    return new Promise<OrchidValue>((resolve) => {
+      this.listenResolvers.push((event: OrchidValue) => {
+        this.implicitContext = event;
+        resolve(event);
+      });
+    });
+  }
+
+  /**
+   * Stream(source) — produce an iterable list of events from a source.
+   *
+   * Per the spec (§10.5), Stream produces an iterable of events.
+   * Behavior depends on the source type:
+   *   - List: returned as-is (already iterable)
+   *   - String (event name): returns all buffered events for that name
+   *   - Other: wraps the evaluated source in a single-element list
+   */
+  private async executeStream(node: AST.StreamExpression, env: Environment): Promise<OrchidValue> {
+    const source = await this.evaluate(node.source, env);
+
+    if (source.kind === 'list') {
+      // Already an iterable — return as-is
+      return source;
+    }
+
+    if (source.kind === 'string') {
+      // Treat as event name — return buffered events for this type
+      const buffered = this.eventBuffer.get(source.value) || [];
+      const events = buffered.map(payload => {
+        const event: OrchidValue = { kind: 'event', name: source.value, payload };
+        return event;
+      });
+      // Consume the buffer
+      this.eventBuffer.delete(source.value);
+      return orchidList(events);
+    }
+
+    // Default: wrap in a single-element list
+    return orchidList([source]);
   }
 
   // ─── Use / Import ──────────────────────────────────────
@@ -1211,8 +1540,20 @@ export class Interpreter {
       return orchidNull();
     }
 
+    // Detect circular imports
+    if (this.importStack.has(resolved)) {
+      const cycle = [...this.importStack, resolved].join(' → ');
+      throw new OrchidError(
+        'CyclicDependency',
+        `Circular import detected: ${cycle}`,
+        node.position,
+      );
+    }
+    this.importStack.add(resolved);
+
     // Read and parse the source
     if (!fs.existsSync(resolved)) {
+      this.importStack.delete(resolved);
       throw new OrchidError(
         'ImportError',
         `Module not found: ${resolved} (from import "${node.path}")`,
@@ -1229,6 +1570,7 @@ export class Interpreter {
       const parser = new Parser();
       ast = parser.parse(tokens);
     } catch (e: any) {
+      this.importStack.delete(resolved);
       throw new OrchidError(
         'ImportError',
         `Failed to parse "${node.path}": ${e.message}`,
@@ -1243,16 +1585,26 @@ export class Interpreter {
       mcpManager: this.mcpManager,
       scriptDir: path.dirname(resolved),
     });
+    // Share the import stack so nested imports can also detect cycles
+    moduleInterpreter.importStack = this.importStack;
 
     try {
       await moduleInterpreter.run(ast);
     } catch (e: any) {
+      this.importStack.delete(resolved);
+      // Preserve CyclicDependency errors rather than wrapping them
+      if (e instanceof OrchidError && e.errorType === 'CyclicDependency') {
+        throw e;
+      }
       throw new OrchidError(
         'ImportError',
         `Error executing "${node.path}": ${e.message}`,
         node.position,
       );
     }
+
+    // Import succeeded — remove from in-progress stack
+    this.importStack.delete(resolved);
 
     // Cache and merge the module's exported bindings
     const moduleEnv = moduleInterpreter.globalEnv;
@@ -1513,11 +1865,16 @@ export class Interpreter {
     return named;
   }
 
-  private resolveTags(tags: AST.Tag[], env: Environment): TagInfo[] {
-    return tags.map(t => ({
-      name: t.name,
-      value: undefined, // Tag values resolved lazily if needed
-    }));
+  private async resolveTags(tags: AST.Tag[], env: Environment): Promise<TagInfo[]> {
+    const resolved: TagInfo[] = [];
+    for (const t of tags) {
+      const info: TagInfo = { name: t.name };
+      if (t.value) {
+        info.value = await this.evaluate(t.value, env);
+      }
+      resolved.push(info);
+    }
+    return resolved;
   }
 
   private nodeToInputString(node: AST.Node): string {
@@ -1531,6 +1888,174 @@ export class Interpreter {
     this.traceLog.push(`[${Date.now() - this.startTime}ms] ${message}`);
     if (this.traceEnabled) {
       console.log(`  [trace] ${message}`);
+    }
+  }
+
+  // ─── Timeout ────────────────────────────────────────────
+
+  /**
+   * Wrap a promise with an optional timeout from resolved tags.
+   *
+   * If a <timeout=N> or <timeout=Ns> tag is present, the operation is
+   * raced against a timer. If the timer wins, a Timeout error is thrown.
+   * Without the tag, the promise passes through unchanged.
+   */
+  private async withTimeout<T>(
+    promise: Promise<T>,
+    tags: TagInfo[],
+    position?: AST.Position,
+  ): Promise<T> {
+    const timeoutTag = tags.find(t => t.name === 'timeout');
+    if (!timeoutTag?.value) return promise;
+
+    let ms: number;
+    if (timeoutTag.value.kind === 'number') {
+      // If the number has a suffix like 's', the raw value is in that unit
+      ms = timeoutTag.value.value;
+      if (timeoutTag.value.suffix === 's') {
+        ms = timeoutTag.value.value * 1000;
+      } else if (timeoutTag.value.suffix === 'm') {
+        ms = timeoutTag.value.value * 60000;
+      } else if (!timeoutTag.value.suffix) {
+        // Bare number — treat as milliseconds
+        ms = timeoutTag.value.value;
+      }
+    } else if (timeoutTag.value.kind === 'string') {
+      // Parse "10s", "5000", "2m"
+      const str = timeoutTag.value.value;
+      const match = str.match(/^(\d+(?:\.\d+)?)(s|ms|m)?$/);
+      if (match) {
+        const n = parseFloat(match[1]);
+        const unit = match[2] || 'ms';
+        if (unit === 's') ms = n * 1000;
+        else if (unit === 'm') ms = n * 60000;
+        else ms = n;
+      } else {
+        return promise; // Unparseable timeout value, skip
+      }
+    } else {
+      return promise; // Non-numeric/string timeout value, skip
+    }
+
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new OrchidError('Timeout', `Operation timed out after ${ms}ms`, position));
+      }, ms);
+
+      promise.then(
+        (result) => { clearTimeout(timer); resolve(result); },
+        (error) => { clearTimeout(timer); reject(error); },
+      );
+    });
+  }
+
+  // ─── Discover ───────────────────────────────────────────
+
+  /**
+   * Implement Discover(pattern) — returns all available namespaces and tools
+   * matching the given glob-like pattern.
+   *
+   * Patterns:
+   *   "*"       → all registered namespaces
+   *   "MCP.*"   → all MCP server namespaces
+   *   "Plugin.*" → all plugin namespaces
+   *   "fs.*"    → all tools under the "fs" namespace
+   *   "postgres" → exact match for a namespace
+   *
+   * The returned list includes:
+   *   - Registered namespace aliases (MCP servers and plugins)
+   *   - Individual tool names in the form "namespace.tool" for MCP servers
+   *   - Individual operation names in the form "namespace.operation" for plugins
+   */
+  private executeDiscover(pattern: string): OrchidValue {
+    const candidates: string[] = [];
+
+    // Collect all registered namespace aliases with their kinds
+    for (const [alias, name] of this.namespaces) {
+      candidates.push(alias);
+
+      // Add namespaced tool names for MCP servers
+      if (this.mcpManager?.hasServer(alias) || this.mcpManager?.hasServer(name)) {
+        const serverName = this.mcpManager.hasServer(alias) ? alias : name;
+        const tools = this.mcpManager.getTools(serverName);
+        for (const tool of tools) {
+          candidates.push(`${alias}.${tool.name}`);
+        }
+      }
+
+      // Add namespaced operation names for plugins
+      const plugin = this.plugins.get(alias);
+      if (plugin) {
+        if (plugin.kind === 'js') {
+          for (const opName of Object.keys(plugin.plugin.operations)) {
+            candidates.push(`${alias}.${opName}`);
+          }
+        } else {
+          for (const macroName of plugin.macros.keys()) {
+            candidates.push(`${alias}.${macroName}`);
+          }
+          for (const agentName of plugin.agents.keys()) {
+            candidates.push(`${alias}.${agentName}`);
+          }
+        }
+      }
+    }
+
+    // Also add built-in macro names
+    for (const builtin of BUILTIN_MACROS) {
+      candidates.push(builtin);
+    }
+    for (const meta of META_OPERATIONS) {
+      candidates.push(meta);
+    }
+
+    // Filter by pattern
+    const matched = candidates.filter(c => this.globMatch(pattern, c));
+    // Deduplicate
+    const unique = [...new Set(matched)];
+    return orchidList(unique.map(n => orchidString(n)));
+  }
+
+  /**
+   * Simple glob matching: supports '*' as wildcard for any sequence of
+   * characters (except '.'), and '**' or trailing '*' to match everything
+   * including dots. Matching is case-insensitive.
+   *
+   * Examples:
+   *   globMatch("MCP.*", "MCP.filesystem") → false (MCP isn't a candidate)
+   *   globMatch("fs.*", "fs.Read")         → true
+   *   globMatch("*", "postgres")           → true
+   *   globMatch("postgres", "postgres")    → true
+   *   globMatch("fs.Re*", "fs.Read")       → true
+   */
+  private globMatch(pattern: string, candidate: string): boolean {
+    // Convert glob pattern to regex
+    let regexStr = '^';
+    for (let i = 0; i < pattern.length; i++) {
+      const ch = pattern[i];
+      if (ch === '*') {
+        if (i + 1 < pattern.length && pattern[i + 1] === '*') {
+          regexStr += '.*'; // ** matches everything including dots
+          i++; // skip second *
+        } else {
+          regexStr += '[^.]*'; // * matches everything except dots
+        }
+      } else if (ch === '?') {
+        regexStr += '[^.]';
+      } else if ('.+^${}()|[]\\'.includes(ch)) {
+        regexStr += '\\' + ch;
+      } else {
+        regexStr += ch;
+      }
+    }
+    regexStr += '$';
+
+    try {
+      const regex = new RegExp(regexStr, 'i');
+      return regex.test(candidate);
+    } catch {
+      // If the pattern produces an invalid regex, fall back to exact match
+      return pattern.toLowerCase() === candidate.toLowerCase();
     }
   }
 }

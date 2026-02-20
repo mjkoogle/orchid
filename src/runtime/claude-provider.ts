@@ -213,7 +213,7 @@ export class ClaudeProvider implements OrchidProvider {
       apiKey: options.apiKey,
     });
     this.model = options.model || 'claude-sonnet-4-5-20250929';
-    this.maxTokens = options.maxTokens || 4096;
+    this.maxTokens = options.maxTokens || 16384;
     this.defaultTemperature = options.temperature;
   }
 
@@ -350,6 +350,14 @@ ${this.buildTagModifiers(tags)}`;
     // Track token usage
     if (response.usage) {
       this.totalTokensUsed += response.usage.input_tokens + response.usage.output_tokens;
+    }
+
+    // Warn on truncation
+    if (response.stop_reason === 'max_tokens') {
+      console.warn(
+        `[warn] Response truncated — hit ${this.maxTokens} token limit. ` +
+        `Use --max-tokens to increase (e.g. --max-tokens 32768).`,
+      );
     }
 
     // Extract text from response

@@ -1,0 +1,40 @@
+@orchid 0.1
+@name "Code Review Agent"
+@description "Fetch a GitHub PR, analyze the changes, and post a structured review."
+@requires MCP("github")
+
+# ── Configuration ─────────────────────────────────────────
+# Set these to the repo and PR you want to review
+owner := "modelcontextprotocol"
+repo := "servers"
+pr_number := 1
+
+# ── Fetch PR Details ──────────────────────────────────────
+pr := github:get_pull_request(owner=owner, repo=repo, pull_number=pr_number)
+Log("Reviewing PR:")
+Log(pr)
+
+files := github:get_pull_request_files(owner=owner, repo=repo, pull_number=pr_number)
+Log("Changed files:")
+Log(files)
+
+# ── Multi-Angle Analysis ─────────────────────────────────
+review := fork:
+    correctness: CoT("review this PR for correctness issues, bugs, and logic errors:\n$pr\n\nChanged files:\n$files")
+    security: RedTeam("review this PR for security vulnerabilities:\n$files")
+    design: CoT("review the design and architecture of these changes. Are there better approaches?:\n$files")
+    testing: CoT("what test cases are missing for these changes?:\n$files")
+
+# ── Synthesize Review ─────────────────────────────────────
+summary := Synthesize(review)
+
+# Apply confidence gating — only flag real issues
+confidence := Confidence(summary)
+
+if confidence > 0.7:
+    final_review := Formal(summary)
+else:
+    # Low confidence — be more cautious, ask questions instead of asserting
+    final_review := CoT("rephrase these findings as questions rather than assertions:\n$summary")
+
+final_review

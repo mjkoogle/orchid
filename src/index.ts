@@ -51,6 +51,8 @@ export function parse(source: string) {
 
 /**
  * Execute an Orchid source string with an optional provider.
+ * Automatically calls interpreter.shutdown() after execution to
+ * invoke plugin teardown hooks.
  */
 export async function execute(
   source: string,
@@ -63,5 +65,9 @@ export async function execute(
     trace: options?.trace,
     scriptDir: options?.scriptDir,
   });
-  return interpreter.run(ast);
+  try {
+    return await interpreter.run(ast);
+  } finally {
+    await interpreter.shutdown();
+  }
 }

@@ -2,7 +2,7 @@
   <h1 align="center">🌸 Orchid</h1>
   <p align="center"><strong>A cognitive choreography language for LLM agent orchestration</strong></p>
   <p align="center">
-    <a href="docs/specification.md">Specification</a> · <a href="examples/">Examples</a> · <a href="CONTRIBUTING.md">Contributing</a>
+    <a href="QUICKSTART.md">Quickstart</a> · <a href="docs/specification.md">Specification</a> · <a href="examples/">Examples</a> · <a href="CONTRIBUTING.md">Contributing</a>
   </p>
 </p>
 
@@ -28,6 +28,20 @@ else:
 ```
 
 Read it aloud. You don't need to be a programmer to understand what this agent will do.
+
+## Getting Started
+
+```bash
+npm install && npm run build
+
+# Try it immediately (no API key needed — uses console provider)
+node dist/cli.js examples/hello_world.orch
+
+# With real LLM reasoning (needs ANTHROPIC_API_KEY)
+node dist/cli.js --provider claude examples/hello_world.orch
+```
+
+See the [Quickstart guide](QUICKSTART.md) for MCP setup and more.
 
 ## Why Orchid?
 
@@ -90,37 +104,59 @@ Validate(output, criteria="complete")<retry=5, fallback=draft>
 ```
 
 ### MCP Tool Integration
-First-class integration with the Model Context Protocol for external tool access.
+First-class integration with the Model Context Protocol for external tool access. Use real MCP servers for filesystem, databases, web search, GitHub, and more.
 
 ```orchid
-Use MCP("filesystem") as fs
-Use MCP("slack")
+@requires MCP("filesystem")
 
-data := fs:Read("/data/report.csv")
-analysis := CoT(data)
-slack:Send("#team", Formal(analysis))
+tree := filesystem:directory_tree(path="src")
+pkg := filesystem:read_text_file(path="package.json")
+analysis := CoT("describe this project:\n$tree\n$pkg")
+filesystem:write_file(path="/tmp/summary.md", content=analysis)
+```
+
+Install servers with one command:
+
+```bash
+node dist/cli.js mcp install filesystem brave-search memory github
 ```
 
 ## Examples
 
-| Example | Description |
-|---|---|
-| [`financial_analysis.orch`](examples/financial_analysis.orch) | Multi-phase stock analysis with adversarial review and confidence gating |
-| [`deep_research.orch`](examples/deep_research.orch) | Research agent with iterative refinement and self-critique |
-| [`threat_model.orch`](examples/threat_model.orch) | STRIDE-based threat modeling with parallel threat generation |
-| [`adaptive_tutor.orch`](examples/adaptive_tutor.orch) | Interactive tutoring agent that adapts to student comprehension |
-| [`hello_world.orch`](examples/hello_world.orch) | Minimal example to get started |
+| Example | MCP Servers | Description |
+|---|---|---|
+| [`hello_world.orch`](examples/hello_world.orch) | none | Minimal: search, verify, reason, present |
+| [`deep_research.orch`](examples/deep_research.orch) | none | Research agent with fork loops, self-critique, iterative refinement |
+| [`fs_test.orch`](examples/fs_test.orch) | filesystem | Read project files, analyze codebase, write summary |
+| [`threat_model.orch`](examples/threat_model.orch) | filesystem | STRIDE threat modeling from actual source code |
+| [`financial_analysis.orch`](examples/financial_analysis.orch) | brave-search, filesystem | Live news search, multi-angle stock analysis, adversarial review |
+| [`adaptive_tutor.orch`](examples/adaptive_tutor.orch) | memory | Assess understanding, build lesson plan, persist to knowledge graph |
+| [`code_review.orch`](examples/code_review.orch) | github | Fetch PR, multi-angle review (correctness, security, design, testing) |
 
 ## Project Structure
 
 ```
 orchid/
+├── src/
+│   ├── cli.ts                     # CLI entry point
+│   ├── index.ts                   # Library exports
+│   ├── lexer/                     # Tokenizer
+│   ├── parser/                    # Recursive descent parser → AST
+│   └── runtime/
+│       ├── interpreter.ts         # Core execution engine
+│       ├── claude-provider.ts     # Anthropic Claude LLM backend
+│       ├── mcp-manager.ts         # MCP server connections
+│       ├── mcp-registry.ts        # Built-in server catalog (12 servers)
+│       └── ...                    # Environment, values, config, plugins, etc.
+├── tests/                         # 12 test suites, 319+ tests
+├── examples/                      # 7 runnable .orch scripts
 ├── docs/
-│   └── specification.md    # Full language specification
-├── examples/               # Standalone .orch example scripts
+│   ├── specification.md           # Full language spec with EBNF grammar
+│   └── ARCHITECTURE.md            # Runtime architecture and data flow
+├── QUICKSTART.md                  # 5-minute setup guide
+├── CLAUDE.md                      # LLM context for AI assistants
 ├── CONTRIBUTING.md
-├── LICENSE
-└── README.md
+└── LICENSE
 ```
 
 ## Specification
@@ -128,7 +164,7 @@ orchid/
 The complete language specification lives at [`docs/specification.md`](docs/specification.md). It covers:
 
 - Core syntax, variables, and operators
-- Reasoning macros (analysis, critique, synthesis, communication, generative)
+- 30+ reasoning macros (analysis, critique, synthesis, communication, generative)
 - Control flow including parallel fork/join
 - Tag system for behavior modification
 - Meta operations (confidence, checkpoints, reflection)
@@ -139,11 +175,20 @@ The complete language specification lives at [`docs/specification.md`](docs/spec
 
 ## Status
 
-Orchid is in **early draft** (v0.1.0). The language design is stabilizing but not yet frozen. A reference interpreter exists (lexer, parser, AST, runtime executor) and is being prepared for open-source release.
+Orchid v0.1.0 — the language design is stabilizing and the **reference interpreter is fully functional**.
 
-**What's here now:** Language specification, examples, formal grammar.
+**What works today:**
+- Complete lexer, parser, and runtime interpreter
+- 30+ reasoning macros powered by Claude API
+- MCP tool integration with 12 built-in servers (filesystem, GitHub, Brave Search, memory, etc.)
+- Parallel fork execution, confidence-gated control flow, agents and macros
+- Sandbox mode with rate limiting and prompt sanitization
+- Plugin system for JS/TS extensions
+- npm registry search for discovering MCP servers
+- Live terminal status spinner during execution
+- 319+ tests across 12 test suites
 
-**What's coming:** Reference interpreter, VS Code syntax highlighting, runtime benchmarks.
+**What's coming:** VS Code syntax highlighting, streaming responses, runtime benchmarks, more providers.
 
 ## Contributing
 
@@ -151,7 +196,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. The most valuable contrib
 
 - **Feedback on the spec** - Does the syntax make sense? What's confusing?
 - **Real-world use cases** - What workflows would you write in Orchid?
-- **Runtime implementations** - Build an interpreter in your language of choice
+- **New providers** - OpenAI, local models, etc.
 - **Tooling** - Syntax highlighting, linters, formatters
 
 ## License

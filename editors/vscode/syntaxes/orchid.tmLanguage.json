@@ -1,0 +1,238 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Orchid",
+  "scopeName": "source.orchid",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#metadata" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#reasoning-macros" },
+    { "include": "#meta-operations" },
+    { "include": "#utility-builtins" },
+    { "include": "#keywords" },
+    { "include": "#constants" },
+    { "include": "#operators" },
+    { "include": "#namespaced-call" },
+    { "include": "#tags" },
+    { "include": "#variables" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.section.orchid",
+          "match": "^\\s*###.*$"
+        },
+        {
+          "name": "comment.line.double.orchid",
+          "match": "^\\s*##.*$"
+        },
+        {
+          "name": "comment.line.number-sign.orchid",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "metadata": {
+      "patterns": [
+        {
+          "name": "keyword.control.directive.orchid",
+          "match": "^@(orchid|name|author|description|requires)\\b"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.orchid",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.orchid",
+              "match": "\\\\[\\\\\"nt$]"
+            },
+            {
+              "name": "variable.other.interpolated.orchid",
+              "match": "\\$[a-zA-Z_][a-zA-Z0-9_]*"
+            },
+            {
+              "name": "variable.other.interpolated.brace.orchid",
+              "begin": "\\$\\{",
+              "end": "\\}",
+              "patterns": [
+                { "include": "#numbers" },
+                { "include": "#variables" }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.orchid",
+          "match": "\\b[0-9]+\\.[0-9]+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.orchid",
+          "match": "\\b[0-9]+\\b"
+        }
+      ]
+    },
+    "reasoning-macros": {
+      "comment": "Built-in reasoning macros — the core of Orchid",
+      "patterns": [
+        {
+          "name": "entity.name.function.reasoning.analysis.orchid",
+          "match": "\\b(CoT|CoVe|Decompose|Classify|Extract|Compare|Timeline|Spatial|Quantify)\\b"
+        },
+        {
+          "name": "entity.name.function.reasoning.critique.orchid",
+          "match": "\\b(Critique|RedTeam|Steelman|DevilsAdvocate|Counterfactual|Validate)\\b"
+        },
+        {
+          "name": "entity.name.function.reasoning.synthesis.orchid",
+          "match": "\\b(Refine|Consensus|Debate|Synthesize|Reconcile|Prioritize)\\b"
+        },
+        {
+          "name": "entity.name.function.reasoning.communication.orchid",
+          "match": "\\b(ELI5|Formal|Analogize|Socratic|Narrate|Translate)\\b"
+        },
+        {
+          "name": "entity.name.function.reasoning.generative.orchid",
+          "match": "\\b(Creative|Brainstorm|Abstract|Ground|Reframe)\\b"
+        },
+        {
+          "name": "entity.name.function.reasoning.search.orchid",
+          "match": "\\b(Search|Summarize)\\b"
+        }
+      ]
+    },
+    "meta-operations": {
+      "patterns": [
+        {
+          "name": "support.function.meta.orchid",
+          "match": "\\b(Confidence|Benchmark|Trace|Checkpoint|Rollback|Reflect|Cost|Elapsed|Explain)\\b"
+        }
+      ]
+    },
+    "utility-builtins": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.orchid",
+          "match": "\\b(Log|Error|Save|len)\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.flow.orchid",
+          "match": "\\b(if|elif|else|for|in|while|until|try|except|finally|return|break)\\b"
+        },
+        {
+          "name": "keyword.control.fork.orchid",
+          "match": "\\b(fork)\\b"
+        },
+        {
+          "name": "keyword.other.definition.orchid",
+          "match": "\\b(agent|macro)\\b"
+        },
+        {
+          "name": "keyword.control.import.orchid",
+          "match": "\\b(import|as|Use|MCP|Plugin|Discover)\\b"
+        },
+        {
+          "name": "keyword.other.event.orchid",
+          "match": "\\b(emit|on|listen|Stream)\\b"
+        },
+        {
+          "name": "keyword.other.orchid",
+          "match": "\\b(assert|require|permissions)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.orchid",
+          "match": "\\b(and|or|not)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.orchid",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.null.orchid",
+          "match": "\\bnull\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.assignment.orchid",
+          "match": ":=|\\+="
+        },
+        {
+          "name": "keyword.operator.comparison.orchid",
+          "match": "==|!=|>=|<=|>|<"
+        },
+        {
+          "name": "keyword.operator.arithmetic.orchid",
+          "match": "\\+|\\-|\\*"
+        },
+        {
+          "name": "keyword.operator.pipe.orchid",
+          "match": "\\|\\||\\|"
+        }
+      ]
+    },
+    "namespaced-call": {
+      "comment": "MCP/Plugin tool calls like filesystem:read_text_file(...)",
+      "patterns": [
+        {
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_-]*)(:)([a-zA-Z_][a-zA-Z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "entity.name.namespace.orchid" },
+            "2": { "name": "punctuation.separator.namespace.orchid" },
+            "3": { "name": "entity.name.function.tool.orchid" }
+          }
+        }
+      ]
+    },
+    "tags": {
+      "comment": "Behavior modifier tags like <deep, retry=3>",
+      "patterns": [
+        {
+          "begin": "(?<=\\))<",
+          "end": ">",
+          "name": "meta.tag.orchid",
+          "patterns": [
+            {
+              "name": "entity.other.attribute-name.tag.orchid",
+              "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+            },
+            {
+              "name": "keyword.operator.assignment.tag.orchid",
+              "match": "="
+            },
+            { "include": "#numbers" },
+            { "include": "#strings" }
+          ]
+        }
+      ]
+    },
+    "variables": {
+      "patterns": [
+        {
+          "name": "variable.language.implicit.orchid",
+          "match": "\\b_\\b"
+        }
+      ]
+    }
+  }
+}

@@ -26,6 +26,11 @@ import {
   deriveServerName,
   NpmPackageResult,
 } from './runtime/mcp-remote-registry';
+import {
+  TerminalStatusReporter,
+  SilentStatusReporter,
+  StatusReporter,
+} from './runtime/status';
 
 const USAGE = `
 orchid - The Orchid Language Runtime v0.1.0
@@ -45,11 +50,13 @@ Provider Options:
   --provider console          Use console provider (default, no API calls)
   --provider claude           Use Claude API provider (requires ANTHROPIC_API_KEY)
   --model <model-id>          Claude model to use (default: claude-sonnet-4-5-20250929)
+  --max-tokens <n>            Max tokens per LLM response (default: 16384)
   --sandbox                   Enable sandbox mode (rate limiting + prompt sanitization)
   --max-requests <n>          Max API requests in sandbox mode (default: 50)
 
 Other Options:
   --trace    Enable execution tracing
+  --quiet    Suppress status spinner (for piping / CI)
   --parse    Parse only (print AST as JSON)
   --lex      Tokenize only (print token stream)
   --config <path>             Path to orchid.config.json (auto-detected by default)
@@ -89,6 +96,7 @@ function getArg(args: string[], flag: string): string | undefined {
 function createProvider(args: string[]): OrchidProvider {
   const providerName = getArg(args, '--provider') || 'console';
   const model = getArg(args, '--model') || process.env.ORCHID_MODEL;
+  const maxTokens = getArg(args, '--max-tokens');
   const sandboxMode = args.includes('--sandbox') || process.env.ORCHID_SANDBOX === '1';
   const maxRequests = getArg(args, '--max-requests');
 
@@ -105,6 +113,7 @@ function createProvider(args: string[]): OrchidProvider {
       provider = new ClaudeProvider({
         apiKey,
         model,
+        maxTokens: maxTokens ? parseInt(maxTokens) : undefined,
       });
       break;
     }
@@ -294,7 +303,7 @@ async function main(): Promise<void> {
 
   const flags = new Set(args.filter(a => a.startsWith('--')));
   // Files are args that don't start with -- and aren't values for flags
-  const flagsWithValues = new Set(['--provider', '--model', '--max-requests', '--config']);
+  const flagsWithValues = new Set(['--provider', '--model', '--max-tokens', '--max-requests', '--config']);
   const files: string[] = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith('--')) {
@@ -352,6 +361,7 @@ async function main(): Promise<void> {
 
   // Full execution
   let mcpManager: MCPManager | undefined;
+  let interpreter: Interpreter | undefined;
 
   try {
     const lexer = new Lexer(source);
@@ -360,6 +370,12 @@ async function main(): Promise<void> {
     const ast = parser.parse(tokens);
     const provider = createProvider(args);
     const traceEnabled = flags.has('--trace');
+    const quiet = flags.has('--quiet');
+
+    // Create status reporter for live terminal feedback
+    const status: StatusReporter = quiet
+      ? new SilentStatusReporter()
+      : new TerminalStatusReporter();
 
     // Load MCP configuration
     const config = loadConfigForScript(filePath);
@@ -371,11 +387,12 @@ async function main(): Promise<void> {
       }
     }
 
-    const interpreter = new Interpreter({
+    interpreter = new Interpreter({
       provider,
       trace: traceEnabled,
       mcpManager,
       scriptDir: path.dirname(filePath),
+      status,
     });
 
     const result = await interpreter.run(ast);
@@ -389,6 +406,10 @@ async function main(): Promise<void> {
     }
     process.exit(1);
   } finally {
+    // Shut down interpreter (calls plugin teardown hooks)
+    if (interpreter) {
+      await interpreter.shutdown();
+    }
     // Always clean up MCP connections
     if (mcpManager) {
       await mcpManager.disconnectAll();

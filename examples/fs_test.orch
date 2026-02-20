@@ -1,0 +1,24 @@
+@orchid 0.1
+@name "Filesystem MCP Test"
+@description "Read project files, analyze the codebase structure, write a summary."
+@requires MCP("filesystem")
+
+# Discover what's in the project
+tree := filesystem:directory_tree(path=".")
+Log("Project structure:")
+Log(tree)
+
+# Read the package.json to understand the project
+pkg := filesystem:read_text_file(path="package.json")
+
+# Read the README for context
+readme := filesystem:read_text_file(path="README.md")
+
+# Analyze the project
+analysis := CoT("Given this package.json:\n$pkg\n\nAnd this README:\n$readme\n\nSummarize what this project is, its dependencies, and how to get started.")
+
+# Write the analysis to a file
+filesystem:write_file(path="/tmp/orchid-workspace/project_summary.md", content=analysis)
+Log("Summary written to /tmp/orchid-workspace/project_summary.md")
+
+analysis
