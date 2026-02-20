@@ -535,6 +535,15 @@ export class Interpreter {
       return result;
     }
 
+    // Auto-connect to configured MCP server on first use
+    if (this.mcpManager?.isConfigured(node.namespace)) {
+      if (this.traceEnabled) this.trace(`Auto-connecting MCP server: ${node.namespace}`);
+      await this.mcpManager.connect(node.namespace);
+      const result = await this.mcpManager.callTool(node.namespace, node.name, args);
+      this.implicitContext = result;
+      return result;
+    }
+
     // Fallback to provider for non-MCP namespaces
     const result = await this.provider.toolCall(node.namespace, node.name, args, tags);
     this.implicitContext = result;
