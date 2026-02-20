@@ -352,6 +352,7 @@ async function main(): Promise<void> {
 
   // Full execution
   let mcpManager: MCPManager | undefined;
+  let interpreter: Interpreter | undefined;
 
   try {
     const lexer = new Lexer(source);
@@ -371,7 +372,7 @@ async function main(): Promise<void> {
       }
     }
 
-    const interpreter = new Interpreter({
+    interpreter = new Interpreter({
       provider,
       trace: traceEnabled,
       mcpManager,
@@ -389,6 +390,10 @@ async function main(): Promise<void> {
     }
     process.exit(1);
   } finally {
+    // Shut down interpreter (calls plugin teardown hooks)
+    if (interpreter) {
+      await interpreter.shutdown();
+    }
     // Always clean up MCP connections
     if (mcpManager) {
       await mcpManager.disconnectAll();

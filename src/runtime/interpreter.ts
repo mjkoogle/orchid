@@ -67,6 +67,7 @@ export class Interpreter {
   private checkpoints: Map<string, { env: Map<string, OrchidValue>; context: OrchidValue }> = new Map();
   private eventHandlers: Map<string, { variable: string; body: AST.Node[]; env: Environment }[]> = new Map();
   private eventBuffer: Map<string, OrchidValue[]> = new Map();
+  private listenResolvers: ((event: OrchidValue) => void)[] = [];
   private namespaces: Map<string, string> = new Map(); // alias -> name
   private startTime = Date.now();
   private traceEnabled: boolean;
@@ -100,6 +101,42 @@ export class Interpreter {
     }
 
     return result;
+  }
+
+  /**
+   * Shut down the interpreter and clean up all resources.
+   *
+   * Calls teardown() on all loaded JS plugins, giving them a chance to
+   * close connections, flush buffers, and release resources. This should
+   * be called when the interpreter is no longer needed (e.g., after script
+   * execution completes or on process exit).
+   */
+  async shutdown(): Promise<void> {
+    const errors: Error[] = [];
+
+    for (const [alias, plugin] of this.plugins) {
+      if (plugin.kind === 'js' && plugin.plugin.teardown) {
+        try {
+          await plugin.plugin.teardown();
+          if (this.traceEnabled) {
+            this.trace(`Plugin "${alias}" teardown complete.`);
+          }
+        } catch (e: any) {
+          errors.push(new Error(`Plugin "${alias}" teardown failed: ${e.message}`));
+          if (this.traceEnabled) {
+            this.trace(`Plugin "${alias}" teardown failed: ${e.message}`);
+          }
+        }
+      }
+    }
+
+    // Clear plugin references
+    this.plugins.clear();
+
+    // If any teardowns failed, log but don't throw — cleanup should be best-effort
+    if (errors.length > 0 && this.traceEnabled) {
+      this.trace(`${errors.length} plugin teardown(s) failed during shutdown.`);
+    }
   }
 
   private async processMetadata(meta: AST.Metadata): Promise<void> {
@@ -218,9 +255,9 @@ export class Interpreter {
       case 'ImplicitContext':
         return this.implicitContext;
       case 'ListenExpression':
-        return orchidNull(); // Placeholder — requires interactive runtime
+        return this.executeListen();
       case 'StreamExpression':
-        return this.evaluate(node.source, env);
+        return this.executeStream(node, env);
 
       default:
         throw new OrchidError('RuntimeError', `Unknown node type: ${(node as any).type}`, (node as any).position);
@@ -377,8 +414,7 @@ export class Interpreter {
     if (name === 'Discover') {
       const input = await this.resolveArgs(node.args, env);
       const pattern = input.length > 0 ? valueToString(input[0]) : '*';
-      const available = Array.from(this.namespaces.keys());
-      return orchidList(available.map(n => orchidString(n)));
+      return this.executeDiscover(pattern);
     }
 
     // Generic built-in reasoning macros — delegate to provider
@@ -680,9 +716,15 @@ export class Interpreter {
 
   private async executeAtomicBlock(node: AST.AtomicBlock, env: Environment): Promise<OrchidValue> {
     // Atomic blocks execute in an isolated child environment.
-    // On success, bindings commit to parent. On failure, nothing leaks out.
+    // On success, bindings commit to parent. On failure, everything rolls back.
     const atomicEnv = env.child();
     const savedContext = this.implicitContext;
+
+    // Snapshot event state for rollback
+    const savedEventBuffer = this.snapshotEventBuffer();
+    const savedCheckpoints = new Map(this.checkpoints);
+    const savedEventHandlers = this.snapshotEventHandlers();
+    const savedListenResolvers = [...this.listenResolvers];
 
     try {
       let result: OrchidValue = orchidNull();
@@ -698,13 +740,44 @@ export class Interpreter {
         atomicEnv.commitToParent();
         throw e;
       }
-      // Rollback: restore context, don't commit bindings
+      // Full rollback: restore all interpreter state
       this.implicitContext = savedContext;
+      this.eventBuffer = savedEventBuffer;
+      this.checkpoints = savedCheckpoints;
+      this.eventHandlers = savedEventHandlers;
+      this.listenResolvers = savedListenResolvers;
+
+      if (this.traceEnabled) {
+        this.trace(`Atomic block rolled back: ${e instanceof Error ? e.message : String(e)}`);
+      }
+
       throw e;
     }
   }
 
+  /** Deep-copy the event buffer for atomic block rollback. */
+  private snapshotEventBuffer(): Map<string, OrchidValue[]> {
+    const snapshot = new Map<string, OrchidValue[]>();
+    for (const [key, values] of this.eventBuffer) {
+      snapshot.set(key, [...values]);
+    }
+    return snapshot;
+  }
+
+  /** Deep-copy the event handlers map for atomic block rollback. */
+  private snapshotEventHandlers(): Map<string, { variable: string; body: AST.Node[]; env: Environment }[]> {
+    const snapshot = new Map<string, { variable: string; body: AST.Node[]; env: Environment }[]>();
+    for (const [key, handlers] of this.eventHandlers) {
+      snapshot.set(key, [...handlers]);
+    }
+    return snapshot;
+  }
+
   private async executeFork(node: AST.ForkExpression, env: Environment): Promise<OrchidValue> {
+    // Snapshot the parent implicit context so each branch starts with the
+    // same state and doesn't observe another branch's intermediate results.
+    const parentContext = this.implicitContext;
+
     // Fork for-loop
     if (node.forLoop) {
       const iterable = await this.evaluate(node.forLoop.iterable, env);
@@ -715,11 +788,7 @@ export class Interpreter {
         iterable.elements.map(async (element) => {
           const forkEnv = env.child();
           forkEnv.set(node.forLoop!.variable, element);
-          let result: OrchidValue = orchidNull();
-          for (const stmt of node.forLoop!.body) {
-            result = await this.execute(stmt, forkEnv);
-          }
-          return result;
+          return this.executeForkBranch(node.forLoop!.body, forkEnv, parentContext);
         })
       );
       const result = orchidList(results);
@@ -736,11 +805,8 @@ export class Interpreter {
       const results = await Promise.all(
         node.branches.map(async (branch) => {
           const forkEnv = env.child();
-          let result: OrchidValue = orchidNull();
-          for (const stmt of branch.body) {
-            result = await this.execute(stmt, forkEnv);
-          }
-          return { name: branch.name!, value: result };
+          const value = await this.executeForkBranch(branch.body, forkEnv, parentContext);
+          return { name: branch.name!, value };
         })
       );
       for (const r of results) {
@@ -755,15 +821,39 @@ export class Interpreter {
     const results = await Promise.all(
       node.branches.map(async (branch) => {
         const forkEnv = env.child();
-        let result: OrchidValue = orchidNull();
-        for (const stmt of branch.body) {
-          result = await this.execute(stmt, forkEnv);
-        }
-        return result;
+        return this.executeForkBranch(branch.body, forkEnv, parentContext);
       })
     );
     const result = orchidList(results);
     this.implicitContext = result;
+    return result;
+  }
+
+  /**
+   * Execute a single fork branch with an isolated implicit context.
+   *
+   * Each branch starts with a snapshot of the parent's implicit context
+   * and restores its own local context before each statement. This prevents
+   * branches from observing each other's intermediate state when they
+   * interleave at async yield points under Promise.all.
+   */
+  private async executeForkBranch(
+    body: AST.Node[],
+    env: Environment,
+    parentContext: OrchidValue,
+  ): Promise<OrchidValue> {
+    let localContext = parentContext;
+    let result: OrchidValue = orchidNull();
+
+    for (const stmt of body) {
+      // Restore this branch's local context before each statement,
+      // in case another branch modified this.implicitContext.
+      this.implicitContext = localContext;
+      result = await this.execute(stmt, env);
+      // Capture the context after the statement completes.
+      localContext = this.implicitContext;
+    }
+
     return result;
   }
 
@@ -914,6 +1004,13 @@ export class Interpreter {
     const payload = node.payload ? await this.evaluate(node.payload, env) : orchidNull();
     const event: OrchidValue = { kind: 'event', name: node.event, payload };
 
+    // If there's a pending listen() waiter, resolve it immediately
+    if (this.listenResolvers.length > 0) {
+      const resolver = this.listenResolvers.shift()!;
+      resolver(event);
+      return orchidNull();
+    }
+
     // Dispatch to registered handlers
     const handlers = this.eventHandlers.get(node.event) || [];
     for (const handler of handlers) {
@@ -955,6 +1052,72 @@ export class Interpreter {
     this.eventBuffer.delete(node.event);
 
     return orchidNull();
+  }
+
+  /**
+   * listen() — consume the oldest buffered event across all event types.
+   *
+   * Per the spec (§10.5), listen() blocks until a single event is received.
+   * In this synchronous runtime, we consume from the event buffer. If no
+   * events are buffered, we resolve any pending listen waiters when the
+   * next event is emitted.
+   */
+  private async executeListen(): Promise<OrchidValue> {
+    // Check all event buffers for the oldest event
+    for (const [eventName, buffer] of this.eventBuffer) {
+      if (buffer.length > 0) {
+        const payload = buffer.shift()!;
+        // Clean up empty buffers
+        if (buffer.length === 0) {
+          this.eventBuffer.delete(eventName);
+        }
+        const event: OrchidValue = { kind: 'event', name: eventName, payload };
+        this.implicitContext = event;
+        return event;
+      }
+    }
+
+    // No buffered events — wait for the next emit.
+    // We create a promise that resolves when an event is emitted.
+    return new Promise<OrchidValue>((resolve) => {
+      this.listenResolvers.push((event: OrchidValue) => {
+        this.implicitContext = event;
+        resolve(event);
+      });
+    });
+  }
+
+  /**
+   * Stream(source) — produce an iterable list of events from a source.
+   *
+   * Per the spec (§10.5), Stream produces an iterable of events.
+   * Behavior depends on the source type:
+   *   - List: returned as-is (already iterable)
+   *   - String (event name): returns all buffered events for that name
+   *   - Other: wraps the evaluated source in a single-element list
+   */
+  private async executeStream(node: AST.StreamExpression, env: Environment): Promise<OrchidValue> {
+    const source = await this.evaluate(node.source, env);
+
+    if (source.kind === 'list') {
+      // Already an iterable — return as-is
+      return source;
+    }
+
+    if (source.kind === 'string') {
+      // Treat as event name — return buffered events for this type
+      const buffered = this.eventBuffer.get(source.value) || [];
+      const events = buffered.map(payload => {
+        const event: OrchidValue = { kind: 'event', name: source.value, payload };
+        return event;
+      });
+      // Consume the buffer
+      this.eventBuffer.delete(source.value);
+      return orchidList(events);
+    }
+
+    // Default: wrap in a single-element list
+    return orchidList([source]);
   }
 
   // ─── Use / Import ──────────────────────────────────────
@@ -1531,6 +1694,116 @@ export class Interpreter {
     this.traceLog.push(`[${Date.now() - this.startTime}ms] ${message}`);
     if (this.traceEnabled) {
       console.log(`  [trace] ${message}`);
+    }
+  }
+
+  // ─── Discover ───────────────────────────────────────────
+
+  /**
+   * Implement Discover(pattern) — returns all available namespaces and tools
+   * matching the given glob-like pattern.
+   *
+   * Patterns:
+   *   "*"       → all registered namespaces
+   *   "MCP.*"   → all MCP server namespaces
+   *   "Plugin.*" → all plugin namespaces
+   *   "fs.*"    → all tools under the "fs" namespace
+   *   "postgres" → exact match for a namespace
+   *
+   * The returned list includes:
+   *   - Registered namespace aliases (MCP servers and plugins)
+   *   - Individual tool names in the form "namespace.tool" for MCP servers
+   *   - Individual operation names in the form "namespace.operation" for plugins
+   */
+  private executeDiscover(pattern: string): OrchidValue {
+    const candidates: string[] = [];
+
+    // Collect all registered namespace aliases with their kinds
+    for (const [alias, name] of this.namespaces) {
+      candidates.push(alias);
+
+      // Add namespaced tool names for MCP servers
+      if (this.mcpManager?.hasServer(alias) || this.mcpManager?.hasServer(name)) {
+        const serverName = this.mcpManager.hasServer(alias) ? alias : name;
+        const tools = this.mcpManager.getTools(serverName);
+        for (const tool of tools) {
+          candidates.push(`${alias}.${tool.name}`);
+        }
+      }
+
+      // Add namespaced operation names for plugins
+      const plugin = this.plugins.get(alias);
+      if (plugin) {
+        if (plugin.kind === 'js') {
+          for (const opName of Object.keys(plugin.plugin.operations)) {
+            candidates.push(`${alias}.${opName}`);
+          }
+        } else {
+          for (const macroName of plugin.macros.keys()) {
+            candidates.push(`${alias}.${macroName}`);
+          }
+          for (const agentName of plugin.agents.keys()) {
+            candidates.push(`${alias}.${agentName}`);
+          }
+        }
+      }
+    }
+
+    // Also add built-in macro names
+    for (const builtin of BUILTIN_MACROS) {
+      candidates.push(builtin);
+    }
+    for (const meta of META_OPERATIONS) {
+      candidates.push(meta);
+    }
+
+    // Filter by pattern
+    const matched = candidates.filter(c => this.globMatch(pattern, c));
+    // Deduplicate
+    const unique = [...new Set(matched)];
+    return orchidList(unique.map(n => orchidString(n)));
+  }
+
+  /**
+   * Simple glob matching: supports '*' as wildcard for any sequence of
+   * characters (except '.'), and '**' or trailing '*' to match everything
+   * including dots. Matching is case-insensitive.
+   *
+   * Examples:
+   *   globMatch("MCP.*", "MCP.filesystem") → false (MCP isn't a candidate)
+   *   globMatch("fs.*", "fs.Read")         → true
+   *   globMatch("*", "postgres")           → true
+   *   globMatch("postgres", "postgres")    → true
+   *   globMatch("fs.Re*", "fs.Read")       → true
+   */
+  private globMatch(pattern: string, candidate: string): boolean {
+    // Convert glob pattern to regex
+    let regexStr = '^';
+    for (let i = 0; i < pattern.length; i++) {
+      const ch = pattern[i];
+      if (ch === '*') {
+        if (i + 1 < pattern.length && pattern[i + 1] === '*') {
+          regexStr += '.*'; // ** matches everything including dots
+          i++; // skip second *
+        } else {
+          regexStr += '[^.]*'; // * matches everything except dots
+        }
+      } else if (ch === '?') {
+        regexStr += '[^.]';
+      } else if ('.+^${}()|[]\\'.includes(ch)) {
+        regexStr += '\\' + ch;
+      } else {
+        regexStr += ch;
+      }
+    }
+    regexStr += '$';
+
+    try {
+      const regex = new RegExp(regexStr, 'i');
+      return regex.test(candidate);
+    } catch {
+      // If the pattern produces an invalid regex, fall back to exact match
+      return pattern.toLowerCase() === candidate.toLowerCase();
     }
   }
 }

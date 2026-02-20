@@ -293,4 +293,252 @@ x := 42`;
       if (result.kind === 'number') expect(result.value).toBe(42);
     });
   });
+
+  // ─── Discover() pattern matching ──────────────────────────
+
+  describe('Discover() pattern matching', () => {
+    it('should return builtins when pattern is *', async () => {
+      const result = await run('items := Discover("*")');
+      expect(result.kind).toBe('list');
+      if (result.kind === 'list') {
+        const names = result.elements.map(e => valueToString(e));
+        // Should include standard builtins
+        expect(names).toContain('CoT');
+        expect(names).toContain('Search');
+        expect(names).toContain('ELI5');
+        expect(names).toContain('Confidence');
+      }
+    });
+
+    it('should filter by pattern', async () => {
+      const result = await run('items := Discover("Co*")');
+      expect(result.kind).toBe('list');
+      if (result.kind === 'list') {
+        const names = result.elements.map(e => valueToString(e));
+        expect(names).toContain('CoT');
+        expect(names).toContain('CoVe');
+        // Should NOT contain unmatched builtins
+        expect(names).not.toContain('ELI5');
+        expect(names).not.toContain('Search');
+      }
+    });
+
+    it('should return empty list for non-matching pattern', async () => {
+      const result = await run('items := Discover("zzz_nonexistent_*")');
+      expect(result.kind).toBe('list');
+      if (result.kind === 'list') {
+        expect(result.elements).toHaveLength(0);
+      }
+    });
+
+    it('should default to * when called with no args', async () => {
+      const result = await run('items := Discover()');
+      expect(result.kind).toBe('list');
+      if (result.kind === 'list') {
+        expect(result.elements.length).toBeGreaterThan(0);
+      }
+    });
+
+    it('should match exact names', async () => {
+      const result = await run('items := Discover("CoT")');
+      expect(result.kind).toBe('list');
+      if (result.kind === 'list') {
+        const names = result.elements.map(e => valueToString(e));
+        expect(names).toContain('CoT');
+        expect(names).toHaveLength(1);
+      }
+    });
+  });
+
+  // ─── Fork parallel execution isolation ────────────────────
+
+  describe('fork branch isolation', () => {
+    it('should isolate implicit context between named fork branches', async () => {
+      const source = `data := fork:
+    a: Search("topic a")
+    b: Search("topic b")`;
+      const result = await run(source);
+      expect(result.kind).toBe('dict');
+      if (result.kind === 'dict') {
+        const a = result.entries.get('a');
+        const b = result.entries.get('b');
+        expect(a).toBeDefined();
+        expect(b).toBeDefined();
+        // Each branch should have its own result, not leaking from the other
+        expect(valueToString(a!)).toContain('topic a');
+        expect(valueToString(b!)).toContain('topic b');
+      }
+    });
+
+    it('should isolate implicit context between unnamed fork branches', async () => {
+      const source = `results := fork[2]:
+    Search("alpha")
+    Search("beta")`;
+      const result = await run(source);
+      expect(result.kind).toBe('list');
+      if (result.kind === 'list') {
+        expect(result.elements).toHaveLength(2);
+        expect(valueToString(result.elements[0])).toContain('alpha');
+        expect(valueToString(result.elements[1])).toContain('beta');
+      }
+    });
+
+    it('should isolate implicit context in fork for-loop', async () => {
+      const source = `topics := ["x", "y", "z"]
+results := fork:
+    for topic in topics:
+        Search(topic)`;
+      const result = await run(source);
+      expect(result.kind).toBe('list');
+      if (result.kind === 'list') {
+        expect(result.elements).toHaveLength(3);
+      }
+    });
+
+    it('should set fork result as implicit context after completion', async () => {
+      const source = `data := fork:
+    a: Search("test1")
+    b: Search("test2")
+n := len(data)`;
+      const result = await run(source);
+      // len(data) should return the number of dict entries
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(2);
+    });
+  });
+
+  // ─── Stream / listen ──────────────────────────────────────
+
+  describe('Stream and listen', () => {
+    it('listen() should consume buffered events', async () => {
+      const source = `emit DataReady("payload1")
+evt := listen()`;
+      const result = await run(source);
+      expect(result.kind).toBe('event');
+      if (result.kind === 'event') {
+        expect(result.name).toBe('DataReady');
+        expect(valueToString(result.payload)).toBe('payload1');
+      }
+    });
+
+    it('listen() should consume events in order', async () => {
+      const source = `emit First("1")
+emit Second("2")
+evt1 := listen()
+evt2 := listen()`;
+      const result = await run(source);
+      // Last statement result is evt2
+      expect(result.kind).toBe('event');
+      if (result.kind === 'event') {
+        expect(result.name).toBe('Second');
+      }
+    });
+
+    it('Stream() should return list as-is', async () => {
+      const source = `items := ["a", "b", "c"]
+result := Stream(items)`;
+      const result = await run(source);
+      expect(result.kind).toBe('list');
+      if (result.kind === 'list') {
+        expect(result.elements).toHaveLength(3);
+      }
+    });
+
+    it('Stream() should collect buffered events by name', async () => {
+      const source = `emit Alert("high")
+emit Alert("low")
+events := Stream("Alert")`;
+      const result = await run(source);
+      expect(result.kind).toBe('list');
+      if (result.kind === 'list') {
+        expect(result.elements).toHaveLength(2);
+        expect(result.elements[0].kind).toBe('event');
+      }
+    });
+
+    it('Stream() should return empty list for no buffered events', async () => {
+      const source = `events := Stream("NoSuchEvent")`;
+      const result = await run(source);
+      expect(result.kind).toBe('list');
+      if (result.kind === 'list') {
+        expect(result.elements).toHaveLength(0);
+      }
+    });
+  });
+
+  // ─── Atomic block transactional rollback ──────────────────
+
+  describe('atomic block rollback', () => {
+    it('should commit bindings on success', async () => {
+      const source = `###
+x := 42
+y := "hello"
+###
+z := x`;
+      const result = await run(source);
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(42);
+    });
+
+    it('should roll back bindings on error', async () => {
+      const source = `x := "before"
+try:
+    ###
+    x := "inside"
+    assert false, "boom"
+    ###
+except:
+    result := x`;
+      const result = await run(source);
+      // x should still be "before" because the atomic block rolled back
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('before');
+    });
+
+    it('should roll back events on error', async () => {
+      const source = `try:
+    ###
+    emit ShouldNotSurvive("data")
+    assert false, "boom"
+    ###
+except:
+    pass := true
+events := Stream("ShouldNotSurvive")`;
+      const result = await run(source);
+      // Events emitted inside the failed atomic block should be rolled back
+      expect(result.kind).toBe('list');
+      if (result.kind === 'list') {
+        expect(result.elements).toHaveLength(0);
+      }
+    });
+
+    it('should roll back checkpoints on error', async () => {
+      const source = `Checkpoint("original")
+try:
+    ###
+    Checkpoint("atomic_cp")
+    assert false, "boom"
+    ###
+except:
+    pass := true
+Rollback("original")
+result := "ok"`;
+      const result = await run(source);
+      // Rollback to "original" should still work
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('ok');
+    });
+
+    it('should preserve events on success', async () => {
+      const source = `###
+emit Survived("data")
+###
+events := Stream("Survived")`;
+      const result = await run(source);
+      expect(result.kind).toBe('list');
+      if (result.kind === 'list') {
+        expect(result.elements).toHaveLength(1);
+      }
+    });
+  });
 });

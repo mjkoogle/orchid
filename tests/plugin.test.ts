@@ -225,6 +225,89 @@ x | ai:GetContext()
   });
 });
 
+// ─── Plugin teardown ───────────────────────────────────────
+
+describe('Plugin system — teardown lifecycle', () => {
+  it('should call teardown on interpreter shutdown', async () => {
+    // Use the programmatic API to control the interpreter lifecycle
+    const { Lexer, Parser, Interpreter } = require('../src');
+    const { ConsoleProvider } = require('../src/runtime/provider');
+
+    const source = `Use Plugin("stateful") as st
+st:Increment()
+st:GetCount()`;
+
+    const lexer = new Lexer(source);
+    const tokens = lexer.tokenize();
+    const parser = new Parser();
+    const ast = parser.parse(tokens);
+
+    const interpreter = new Interpreter({
+      provider: new ConsoleProvider(),
+      scriptDir: fixturesDir,
+    });
+
+    const result = await interpreter.run(ast);
+    expect(result.kind).toBe('number');
+    if (result.kind === 'number') expect(result.value).toBe(1);
+
+    // Call shutdown — this should invoke teardown() on the stateful plugin
+    await interpreter.shutdown();
+
+    // After shutdown, the stateful plugin's teardown resets counter and setupCalled.
+    // If we create a new interpreter and load the plugin again, setup will be called fresh.
+    const interpreter2 = new Interpreter({
+      provider: new ConsoleProvider(),
+      scriptDir: fixturesDir,
+    });
+
+    const source2 = `Use Plugin("stateful") as st
+st:WasSetup()`;
+    const ast2 = new Parser().parse(new Lexer(source2).tokenize());
+    const result2 = await interpreter2.run(ast2);
+    expect(valueToString(result2)).toBe('yes');
+
+    await interpreter2.shutdown();
+  });
+
+  it('should handle shutdown with no plugins gracefully', async () => {
+    const { Lexer, Parser, Interpreter } = require('../src');
+    const { ConsoleProvider } = require('../src/runtime/provider');
+
+    const source = `x := 42`;
+    const lexer = new Lexer(source);
+    const ast = new Parser().parse(lexer.tokenize());
+
+    const interpreter = new Interpreter({
+      provider: new ConsoleProvider(),
+    });
+
+    await interpreter.run(ast);
+    // Should not throw
+    await interpreter.shutdown();
+  });
+
+  it('should call teardown via execute() convenience function', async () => {
+    // execute() now calls shutdown() in its finally block,
+    // so teardown should have been called after execution.
+    const result = await run(`
+Use Plugin("stateful") as st
+st:Increment()
+st:Increment()
+st:GetCount()
+`);
+    expect(result.kind).toBe('number');
+    if (result.kind === 'number') expect(result.value).toBe(2);
+
+    // After execute(), shutdown was called. Load the plugin again:
+    const result2 = await run(`
+Use Plugin("stateful") as st
+st:WasSetup()
+`);
+    expect(valueToString(result2)).toBe('yes');
+  });
+});
+
 // ─── ORCHID_PLUGIN_PATH ────────────────────────────────────
 
 describe('Plugin system — ORCHID_PLUGIN_PATH', () => {
