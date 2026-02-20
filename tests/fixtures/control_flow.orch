@@ -1,0 +1,29 @@
+@orchid 0.1
+@name "Control Flow"
+
+# Variables
+x := 10
+total := 0
+
+# For loop
+for i in [1, 2, 3, 4, 5]:
+    total += i
+
+Log(total)
+
+# If/elif/else
+if x > 20:
+    label := "big"
+elif x > 5:
+    label := "medium"
+else:
+    label := "small"
+
+Log(label)
+
+# While loop
+count := 0
+while count < 3:
+    count += 1
+
+Log(count)

@@ -587,27 +587,134 @@ else:
 
 ## 9. MCP and Plugin Integration
 
-### 9.1 Importing Tools
+Orchid has two mechanisms for extending functionality beyond the core language:
+
+- **MCP** — connects to external tool servers that speak the Model Context Protocol. These are running processes (databases, APIs, file systems) that provide tools over a transport layer. Think of MCP as *infrastructure integration*.
+- **Plugin** — runtime capability extensions that register named operations. Plugins are like skills: they run in-process, have access to the LLM provider, and expose operations through the `namespace:Operation()` interface. Think of Plugins as *skills that extend what Orchid can do*.
+
+The key differences between the three extension mechanisms:
+
+| Mechanism | What it is | Syntax | Scope |
+|-----------|-----------|--------|-------|
+| `import`  | Orchid code reuse | `import path as name` | Merges bindings into current scope |
+| `Use MCP` | External tool server | `Use MCP("name")` | Namespaced, runs out-of-process |
+| `Use Plugin` | Runtime capability | `Use Plugin("name")` | Namespaced, runs in-process with provider access |
+
+### 9.1 Importing MCP Servers
 
 ```orchid
 Use MCP("filesystem") as fs
 Use MCP("postgres")
 Use MCP("slack")
-Use Plugin("web-scraper@~1.3")
 ```
 
-### 9.2 Tool Invocation
+MCP servers are configured in `orchid.config.json` and connected at runtime. If a server is not configured, the runtime warns and falls back to simulated calls.
 
-Tools use `namespace:operation` syntax.
+### 9.2 Plugins
+
+Plugins are runtime capability extensions — modules that register named operations callable via `namespace:Operation()` syntax. Unlike MCP servers (external processes), plugins run in-process and have direct access to the LLM provider.
+
+```orchid
+Use Plugin("sentiment") as s
+Use Plugin("web-scraper") as scraper
+```
+
+The runtime resolves plugins from:
+
+1. A `plugins/` directory relative to the script
+2. Paths listed in the `ORCHID_PLUGIN_PATH` environment variable
+
+Plugins can be implemented in two ways:
+
+#### JS/TS Plugins (Primary)
+
+JS/TS plugins implement the `OrchidPlugin` interface and have full access to the runtime context, including the LLM provider. This is the primary plugin mechanism — it lets plugins leverage the provider for reasoning, search, and tool dispatch.
+
+```typescript
+// plugins/sentiment.js
+const plugin = {
+  name: 'sentiment',
+  description: 'Sentiment analysis operations',
+
+  // Called once when the plugin is loaded
+  async setup(ctx) {
+    // Initialize resources, validate config, etc.
+  },
+
+  // Called when the interpreter shuts down
+  async teardown() {
+    // Cleanup resources
+  },
+
+  operations: {
+    async Analyze(args, ctx) {
+      const text = valueToString(args.arg0);
+      // Plugins can call back into the LLM provider
+      return ctx.provider.execute('Classify', text, {
+        categories: 'positive,negative,neutral'
+      }, ctx.tags);
+    },
+
+    async Score(args, ctx) {
+      const text = valueToString(args.arg0);
+      return ctx.provider.execute('Quantify', text, {
+        dimension: 'sentiment -1.0 to 1.0'
+      }, ctx.tags);
+    },
+  },
+};
+
+module.exports = plugin;
+```
+
+**Plugin context** — every operation receives a `PluginContext` with:
+- `provider` — the LLM provider (call reasoning operations, search, etc.)
+- `implicitContext` — the current implicit context value (for pipe chains)
+- `tags` — any tags attached to the invocation
+- `trace(msg)` — emit a trace message
+
+#### .orch Plugins (Convenience)
+
+For simpler plugins that don't need provider access, `.orch` files work as a convenience. The file's exported agents and macros become the plugin's operations.
+
+```orchid
+# plugins/greeter.orch
+@orchid 0.1
+@name "Greeter Plugin"
+
+agent Greet(name):
+    return "Hello, $name!"
+
+macro Shout(message):
+    return "$message!!!"
+```
+
+#### Using Plugins
+
+Both JS and .orch plugins use the same `namespace:Operation()` invocation syntax:
+
+```orchid
+Use Plugin("sentiment") as s
+Use Plugin("greeter") as g
+
+label := s:Analyze("I love this product!")
+score := s:Score("The service was terrible")
+greeting := g:Greet("World")
+```
+
+### 9.3 Tool Invocation
+
+Both MCP servers and Plugins use the same `namespace:operation` syntax for invocation.
 
 ```orchid
 data := fs:Read("/data/report.csv")
 analysis := CoT(data)
 postgres:Write("INSERT INTO reports VALUES ($analysis)")
 slack:Send("#team", "Analysis complete: $analysis")
+s:Analyze("The quarterly results look promising")
 ```
 
-### 9.3 Tool Discovery
+### 9.4 Tool Discovery
 
 ```orchid
 available := Discover("MCP.*")
@@ -618,15 +725,19 @@ else:
     Error("database_unavailable")
 ```
 
-### 9.4 Dynamic Tool Loading
+### 9.5 Dynamic Tool Loading
 
 ```orchid
 if need_weather:
     Use MCP("weather-api")
     forecast := weather_api:Forecast(zip=90210)
+
+if need_analysis:
+    Use Plugin("sentiment") as s
+    label := s:Analyze(text)
 ```
 
-### 9.5 Tool Permissions
+### 9.6 Tool Permissions
 
 ```orchid
 # Declare required permissions upfront
@@ -634,7 +745,6 @@ permissions:
     fs: [read]
     postgres: [read, write]
     slack: [send]
-    web_scraper: [fetch]
 ```
 
 ---
@@ -870,7 +980,7 @@ The `@` prefix denotes file-level metadata declarations. These must appear at th
 @name "Stock Analysis Pipeline"
 @author "Mike"
 @description "Automated financial analysis with confidence gating"
-@requires MCP("financial-data"), MCP("filesystem")
+@requires MCP("financial-data"), MCP("filesystem"), Plugin("sentiment-analysis")
 ```
 
 ### 13.3 Imports and Composability

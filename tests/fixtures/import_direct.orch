@@ -1,0 +1,5 @@
+@orchid 0.1
+
+import math_helpers
+result := double_val + triple_val
+Log(result)

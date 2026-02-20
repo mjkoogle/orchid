@@ -1,0 +1,5 @@
+@orchid 0.1
+@name "Hello E2E"
+
+greeting := "hello world"
+Log(greeting)

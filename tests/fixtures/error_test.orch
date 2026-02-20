@@ -1,0 +1,8 @@
+@orchid 0.1
+
+try:
+    Error("something broke")
+except:
+    Log("caught error")
+
+Log("after try")

@@ -1,0 +1,11 @@
+@orchid 0.1
+@name "Greeter Plugin"
+@description "A simple plugin for testing"
+
+agent Greet(name):
+    return "Hello, $name!"
+
+macro Shout(message):
+    return "$message!!!"
+
+farewell := "should not leak"
