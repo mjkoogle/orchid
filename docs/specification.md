@@ -354,61 +354,11 @@ From lowest to highest precedence:
 
 ---
 
-## 5. Tags (Behavior Modifiers)
-
-Tags modify the execution behavior of any operation. They are appended inline using angle brackets.
-
-```orchid
-Operation("args")<tag>
-Operation("args")<tag1, tag2>
-```
-
-### 5.1 Execution Tags
-
-| Tag              | Description                                                              |
-|------------------|--------------------------------------------------------------------------|
-| `<urgent>`       | Prioritize speed over thoroughness. Skip non-essential verification.     |
-| `<quick>`        | Abbreviated reasoning. Concise result, no deep analysis.                 |
-| `<deep>`         | Exhaustive analysis. Explore edge cases, consider multiple framings.     |
-| `<best_effort>`  | Accept partial or degraded results rather than failing.                  |
-| `<tentative>`    | Low confidence acceptable. Mark output as provisional.                   |
-| `<strict>`       | Zero tolerance for ambiguity. Fail rather than assume.                   |
-
-### 5.2 Reliability Tags
-
-| Tag              | Description                                                              |
-|------------------|--------------------------------------------------------------------------|
-| `<retry>`        | Retry on failure. `<retry=3>` for max attempts, `<retry=3, backoff>`.   |
-| `<timeout=Ns>`   | Abort and return partial results after N seconds.                        |
-| `<idempotent>`   | Safe to re-execute. Runtime may deduplicate calls.                       |
-| `<cached>`       | Use cached results if available and fresh.                               |
-| `<fallback=X>`   | On failure, substitute value X.                                          |
-
-### 5.3 Output Tags
-
-| Tag              | Description                                                              |
-|------------------|--------------------------------------------------------------------------|
-| `<private>`      | Suppress from logs, traces, and persisted output.                        |
-| `<silent>`       | Execute without emitting visible output. Side effects still apply.       |
-| `<verbose>`      | Include full reasoning trace in output, not just the conclusion.         |
-| `<raw>`          | Return unprocessed output. Skip default formatting/summarization.        |
-| `<cite>`         | Require source attribution for all claims.                               |
-
-### 5.4 Composition Tags
-
-| Tag              | Description                                                              |
-|------------------|--------------------------------------------------------------------------|
-| `<append>`       | Add to existing context rather than replacing it.                        |
-| `<isolated>`     | Execute without access to surrounding context. Clean-room reasoning.     |
-| `<frozen>`       | Lock this output. Downstream operations cannot modify it.                |
-
----
-
-## 6. Reasoning Macros
+## 5. Reasoning Macros
 
 Reasoning macros are named cognitive operations that shape *how the agent reasons*. Unlike functions that transform data, macros encode reusable patterns of thought.
 
-### 6.1 Analysis Macros
+### 5.1 Analysis Macros
 
 | Macro              | Signature                     | Description                                             |
 |--------------------|-------------------------------|---------------------------------------------------------|
@@ -422,7 +372,7 @@ Reasoning macros are named cognitive operations that shape *how the agent reason
 | `Spatial`          | `Spatial(context)`            | Geographic or visual-spatial reasoning.                 |
 | `Quantify`         | `Quantify(claim)`             | Attach numbers, ranges, or magnitudes to claims.        |
 
-### 6.2 Critique Macros
+### 5.2 Critique Macros
 
 | Macro              | Signature                     | Description                                             |
 |--------------------|-------------------------------|---------------------------------------------------------|
@@ -433,7 +383,7 @@ Reasoning macros are named cognitive operations that shape *how the agent reason
 | `Counterfactual`   | `Counterfactual(scenario)`    | What-if analysis. Explore alternate outcomes.           |
 | `Validate`         | `Validate(output, criteria)`  | Check output against explicit acceptance criteria.      |
 
-### 6.3 Synthesis Macros
+### 5.3 Synthesis Macros
 
 | Macro              | Signature                     | Description                                             |
 |--------------------|-------------------------------|---------------------------------------------------------|
@@ -444,7 +394,7 @@ Reasoning macros are named cognitive operations that shape *how the agent reason
 | `Reconcile`        | `Reconcile(conflicts)`        | Resolve contradictions between sources or analyses.     |
 | `Prioritize`       | `Prioritize(items, criteria)` | Rank items by importance given criteria.                |
 
-### 6.4 Communication Macros
+### 5.4 Communication Macros
 
 | Macro              | Signature                     | Description                                             |
 |--------------------|-------------------------------|---------------------------------------------------------|
@@ -455,7 +405,7 @@ Reasoning macros are named cognitive operations that shape *how the agent reason
 | `Narrate`          | `Narrate(data)`               | Transform data/analysis into narrative form.            |
 | `Translate`        | `Translate(content, audience)`| Adapt content for a specific audience.                  |
 
-### 6.5 Generative Macros
+### 5.5 Generative Macros
 
 | Macro              | Signature                     | Description                                             |
 |--------------------|-------------------------------|---------------------------------------------------------|
@@ -465,7 +415,7 @@ Reasoning macros are named cognitive operations that shape *how the agent reason
 | `Ground`           | `Ground(abstraction)`         | Connect abstract concepts to concrete examples.         |
 | `Reframe`          | `Reframe(problem)`            | Approach from a fundamentally different angle.          |
 
-### 6.6 Custom Macro Definition
+### 5.6 Custom Macro Definition
 
 Macros extend the standard library with reusable, parameterized cognitive patterns. Tags can be applied at **definition time** (defaults for every invocation) or at **call site** (per-invocation override).
 
@@ -499,6 +449,56 @@ macro Spitball(problem)<private, tentative>:
 # Caller can override privacy
 keeper := Spitball("how to reduce API latency")<verbose>
 ```
+
+---
+
+## 6. Tags (Behavior Modifiers)
+
+Tags modify the execution behavior of any operation. They are appended inline using angle brackets.
+
+```orchid
+Operation("args")<tag>
+Operation("args")<tag1, tag2>
+```
+
+### 6.1 Execution Tags
+
+| Tag              | Description                                                              |
+|------------------|--------------------------------------------------------------------------|
+| `<urgent>`       | Prioritize speed over thoroughness. Skip non-essential verification.     |
+| `<quick>`        | Abbreviated reasoning. Concise result, no deep analysis.                 |
+| `<deep>`         | Exhaustive analysis. Explore edge cases, consider multiple framings.     |
+| `<best_effort>`  | Accept partial or degraded results rather than failing.                  |
+| `<tentative>`    | Low confidence acceptable. Mark output as provisional.                   |
+| `<strict>`       | Zero tolerance for ambiguity. Fail rather than assume.                   |
+
+### 6.2 Reliability Tags
+
+| Tag              | Description                                                              |
+|------------------|--------------------------------------------------------------------------|
+| `<retry>`        | Retry on failure. `<retry=3>` for max attempts, `<retry=3, backoff>`.   |
+| `<timeout=Ns>`   | Abort and return partial results after N seconds.                        |
+| `<idempotent>`   | Safe to re-execute. Runtime may deduplicate calls.                       |
+| `<cached>`       | Use cached results if available and fresh.                               |
+| `<fallback=X>`   | On failure, substitute value X.                                          |
+
+### 6.3 Output Tags
+
+| Tag              | Description                                                              |
+|------------------|--------------------------------------------------------------------------|
+| `<private>`      | Suppress from logs, traces, and persisted output.                        |
+| `<silent>`       | Execute without emitting visible output. Side effects still apply.       |
+| `<verbose>`      | Include full reasoning trace in output, not just the conclusion.         |
+| `<raw>`          | Return unprocessed output. Skip default formatting/summarization.        |
+| `<cite>`         | Require source attribution for all claims.                               |
+
+### 6.4 Composition Tags
+
+| Tag              | Description                                                              |
+|------------------|--------------------------------------------------------------------------|
+| `<append>`       | Add to existing context rather than replacing it.                        |
+| `<isolated>`     | Execute without access to surrounding context. Clean-room reasoning.     |
+| `<frozen>`       | Lock this output. Downstream operations cannot modify it.                |
 
 ---
 
