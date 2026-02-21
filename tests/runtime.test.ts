@@ -91,6 +91,66 @@ describe('Runtime', () => {
     });
   });
 
+  describe('Generate macro', () => {
+    it('should return string for default (text) format', async () => {
+      const result = await run('Generate("a short poem")');
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toContain('Generate');
+    });
+
+    it('should return asset for format=image', async () => {
+      const result = await run('Generate("a dog", format="image")');
+      expect(result.kind).toBe('asset');
+      if (result.kind === 'asset') {
+        expect(result.mediaType).toBe('image');
+        expect(result.mimeType).toBe('image/png');
+        expect(result.path).toBeDefined();
+      }
+    });
+
+    it('should return asset for format=audio', async () => {
+      const result = await run('cover := Generate("podcast intro", format="audio")');
+      expect(result.kind).toBe('asset');
+      if (result.kind === 'asset') {
+        expect(result.mediaType).toBe('audio');
+        expect(result.mimeType).toBe('audio/mpeg');
+      }
+    });
+
+    it('should return asset for format=video and format=document', async () => {
+      const vid = await run('v := Generate("sunset", format="video")');
+      expect(vid.kind).toBe('asset');
+      if (vid.kind === 'asset') expect(vid.mediaType).toBe('video');
+
+      const doc = await run('d := Generate("report", format="document")');
+      expect(doc.kind).toBe('asset');
+      if (doc.kind === 'asset') expect(doc.mediaType).toBe('document');
+    });
+
+    it('should allow using Generate output (e.g. Save)', async () => {
+      const result = await run('img := Generate("logo", format="image")\nSave(img)');
+      expect(result.kind).toBe('null');
+    });
+
+    it('should pass generated image as attachment to Critique/Refine/CoT (operate on media)', async () => {
+      const result = await run('cover := Generate("dog", format="image")\ncritique := Critique(cover)');
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') {
+        expect(result.value).toContain('media');
+        expect(result.value).toContain('image');
+      }
+    });
+
+    it('should accept optional prompt when first arg is asset (e.g. Refine(cover, "focus on X"))', async () => {
+      const result = await run('c := Generate("x", format="image")\nout := Refine(c, "focus on composition")');
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') {
+        expect(result.value).toContain('Refine');
+        expect(result.value).toContain('media');
+      }
+    });
+  });
+
   describe('control flow', () => {
     it('should execute if statement (true branch)', async () => {
       const result = await run('x := 10\nif x > 5:\n    y := "big"');

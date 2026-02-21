@@ -5,9 +5,10 @@
  * system prompts that elicit the right kind of reasoning for each macro.
  */
 
+import * as fs from 'fs';
 import Anthropic from '@anthropic-ai/sdk';
-import { OrchidProvider, TagInfo } from './provider';
-import { OrchidValue, orchidString, orchidNumber, orchidList } from './values';
+import { OrchidProvider, TagInfo, ExecuteOptions } from './provider';
+import { OrchidValue, OrchidAsset, orchidString, orchidNumber, orchidList, GenerateFormat } from './values';
 import { describeBuiltin } from './builtins';
 
 // ─── Configuration ──────────────────────────────────────
@@ -247,16 +248,22 @@ export class ClaudeProvider implements OrchidProvider {
     input: string,
     context: Record<string, string>,
     tags: TagInfo[],
+    options?: ExecuteOptions,
   ): Promise<OrchidValue> {
     const systemPrompt = this.buildSystemPrompt(operation, context, tags);
     const userMessage = this.buildUserMessage(input, context);
     const temperature = this.getTemperature(operation, tags);
 
-    const response = await this.callClaude(systemPrompt, userMessage, temperature);
+    const response = await (options?.attachments?.length
+      ? this.callClaudeWithAttachments(systemPrompt, userMessage, options.attachments, temperature)
+      : this.callClaude(systemPrompt, userMessage, temperature));
 
     // Track conversation for context-aware follow-up operations
+    const userContentDesc = options?.attachments?.length
+      ? `[${operation}] [${options.attachments.length} attachment(s)] ${userMessage}`
+      : `[${operation}] ${userMessage}`;
     this.conversationHistory.push(
-      { role: 'user', content: `[${operation}] ${userMessage}` },
+      { role: 'user', content: userContentDesc },
       { role: 'assistant', content: response },
     );
     // Keep history bounded
@@ -347,6 +354,18 @@ ${this.buildTagModifiers(tags)}`;
     return orchidString(response);
   }
 
+  async generate(prompt: string, format: GenerateFormat, tags: TagInfo[]): Promise<OrchidValue> {
+    if (format === 'text') {
+      return this.execute('Creative', prompt, {}, tags);
+    }
+    // Claude API does not support image/audio/video/document generation.
+    throw new Error(
+      `Generate(format=${format}) is not supported by the Claude provider. ` +
+      'Use an MCP server or plugin for image, audio, video, or document generation. ' +
+      'Example: @requires MCP("image-server") then call the server\'s generate tool.',
+    );
+  }
+
   /** Returns total tokens consumed across all API calls this session. */
   getTokensUsed(): number {
     return this.totalTokensUsed;
@@ -386,8 +405,84 @@ ${this.buildTagModifiers(tags)}`;
     }
 
     // Extract text from response
-    const textBlock = response.content.find(block => block.type === 'text');
-    return textBlock ? textBlock.text : '';
+    const textBlock = response.content.find((block: { type: string }) => block.type === 'text');
+    return textBlock ? (textBlock as { text: string }).text : '';
+  }
+
+  /** Call Claude with image (or other) attachments for vision/multimodal. */
+  private async callClaudeWithAttachments(
+    systemPrompt: string,
+    userMessage: string,
+    attachments: OrchidAsset[],
+    temperature: number,
+  ): Promise<string> {
+    const imageBlocks = await this.getImageBlocks(attachments);
+    if (imageBlocks.length === 0) {
+      return this.callClaude(
+        systemPrompt,
+        userMessage + '\n\n[No image data available for attached assets; analyzing from context.]',
+        temperature,
+      );
+    }
+
+    type ImageBlock = { type: 'image'; source: { type: 'base64'; media_type: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'; data: string } };
+    const content: Array<ImageBlock | { type: 'text'; text: string }> = [
+      ...imageBlocks,
+      { type: 'text', text: userMessage },
+    ];
+
+    const response = await this.client.messages.create({
+      model: this.model,
+      max_tokens: this.maxTokens,
+      temperature,
+      system: systemPrompt,
+      messages: [{ role: 'user', content }],
+    });
+
+    if (response.usage) {
+      this.totalTokensUsed += response.usage.input_tokens + response.usage.output_tokens;
+    }
+
+    if (response.stop_reason === 'max_tokens') {
+      console.warn(
+        `[warn] Response truncated — hit ${this.maxTokens} token limit. ` +
+        `Use --max-tokens to increase (e.g. --max-tokens 32768).`,
+      );
+    }
+
+    const textBlock = response.content.find((block: { type: string }) => block.type === 'text');
+    return textBlock ? (textBlock as { text: string }).text : '';
+  }
+
+  private static readonly IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const;
+
+  /** Build API image blocks from OrchidAssets (image type only; base64). */
+  private async getImageBlocks(attachments: OrchidAsset[]): Promise<Array<{ type: 'image'; source: { type: 'base64'; media_type: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'; data: string } }>> {
+    const blocks: Array<{ type: 'image'; source: { type: 'base64'; media_type: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'; data: string } }> = [];
+    for (const asset of attachments) {
+      if (asset.mediaType !== 'image') continue;
+      let data: string | undefined;
+      if (asset.data) {
+        data = asset.data;
+      } else if (asset.url?.startsWith('data:')) {
+        const match = asset.url.match(/^data:([^;]+);base64,(.+)$/);
+        if (match) data = match[2];
+      } else if (asset.path && fs.existsSync(asset.path)) {
+        try {
+          data = fs.readFileSync(asset.path, { encoding: 'base64' });
+        } catch {
+          // skip
+        }
+      }
+      if (data) {
+        const mime = asset.mimeType || 'image/png';
+        const mediaType = (ClaudeProvider.IMAGE_MIME_TYPES as readonly string[]).includes(mime)
+          ? (mime as 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp')
+          : 'image/png';
+        blocks.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data } });
+      }
+    }
+    return blocks;
   }
 
   private buildSystemPrompt(

@@ -472,8 +472,14 @@ export class Interpreter {
 
     if (name === 'Save') {
       const input = await this.resolveArgs(node.args, env);
-      const content = input.length > 0 ? valueToString(input[0]) : valueToString(this.implicitContext);
-      console.log(`[Save]: ${content.slice(0, 100)}...`);
+      const value = input.length > 0 ? input[0] : this.implicitContext;
+      if (value.kind === 'asset') {
+        const loc = value.path || value.url || '(inline data)';
+        console.log(`[Save] asset ${value.mediaType} (${value.mimeType}): ${loc}`);
+      } else {
+        const content = valueToString(value);
+        console.log(`[Save]: ${content.slice(0, 100)}${content.length > 100 ? '...' : ''}`);
+      }
       return orchidNull();
     }
 
@@ -492,12 +498,46 @@ export class Interpreter {
       return this.executeDiscover(pattern);
     }
 
+    if (name === 'Generate') {
+      const formatArg = node.args.find(a => a.name === 'format');
+      const promptArg = node.args.find(a => a.name !== 'format');
+      const prompt = promptArg
+        ? valueToString(await this.evaluate(promptArg.value, env))
+        : valueToString(this.implicitContext);
+      const formatStr = formatArg
+        ? valueToString(await this.evaluate(formatArg.value, env)).toLowerCase()
+        : 'text';
+      const validFormats = ['text', 'image', 'audio', 'video', 'document'];
+      const format = validFormats.includes(formatStr) ? formatStr as import('./values').GenerateFormat : 'text';
+      this.status.start(`Generate (${format})...`);
+      const result = await this.withTagBehaviors('Generate', prompt, tags, async () => {
+        return this.withTimeout(
+          this.provider.generate(prompt, format, tags),
+          tags, node.position,
+        );
+      }, node.position);
+      this.status.succeed(`Generate (${format}) done`);
+      this.implicitContext = result;
+      return result;
+    }
+
     // Generic built-in reasoning macros — delegate to provider
     if (BUILTIN_MACROS.has(name)) {
       const input = await this.resolveArgs(node.args, env);
-      const inputStr = input.length > 0
-        ? valueToString(input[0])
-        : valueToString(this.implicitContext);
+      const primary = input.length > 0 ? input[0] : this.implicitContext;
+
+      // When primary input is media (OrchidAsset), pass as attachments so the provider
+      // can run vision/multimodal (e.g. Critique(image) critiques the image itself).
+      let inputStr: string;
+      let options: { attachments?: import('./values').OrchidAsset[] } | undefined;
+      if (primary.kind === 'asset') {
+        options = { attachments: [primary] };
+        inputStr = input.length > 1
+          ? valueToString(input[1])
+          : `Analyze the attached ${primary.mediaType}.`;
+      } else {
+        inputStr = valueToString(primary);
+      }
 
       // Build context from keyword args
       const context: Record<string, string> = {};
@@ -519,7 +559,7 @@ export class Interpreter {
 
       return this.withTagBehaviors(name, inputStr, tags, async () => {
         return this.withTimeout(
-          this.provider.execute(name, inputStr, execContext, tags),
+          this.provider.execute(name, inputStr, execContext, tags, options),
           tags, node.position,
         );
       }, node.position);
@@ -527,13 +567,19 @@ export class Interpreter {
 
     // Unknown operation — try calling as a generic operation
     const input = await this.resolveArgs(node.args, env);
-    const inputStr = input.length > 0
-      ? valueToString(input[0])
-      : valueToString(this.implicitContext);
+    const primary = input.length > 0 ? input[0] : this.implicitContext;
+    let inputStr: string;
+    let options: { attachments?: import('./values').OrchidAsset[] } | undefined;
+    if (primary.kind === 'asset') {
+      options = { attachments: [primary] };
+      inputStr = input.length > 1 ? valueToString(input[1]) : `Analyze the attached ${primary.mediaType}.`;
+    } else {
+      inputStr = valueToString(primary);
+    }
 
     return this.withTagBehaviors(name, inputStr, tags, async () => {
       return this.withTimeout(
-        this.provider.execute(name, inputStr, {}, tags),
+        this.provider.execute(name, inputStr, {}, tags, options),
         tags, node.position,
       );
     }, node.position);

@@ -14,7 +14,7 @@ export const BUILTIN_MACROS = new Set([
   // Communication
   'ELI5', 'Formal', 'Analogize', 'Socratic', 'Narrate', 'Translate',
   // Generative
-  'Creative', 'Brainstorm', 'Abstract', 'Ground', 'Reframe',
+  'Creative', 'Brainstorm', 'Abstract', 'Ground', 'Reframe', 'Generate',
   // Meta
   'Explain', 'Confidence', 'Benchmark', 'Trace', 'Checkpoint', 'Rollback',
   'Reflect', 'Cost', 'Elapsed',
@@ -69,6 +69,7 @@ export function describeBuiltin(name: string): string {
     Abstract: 'Extract general principles from specific instances.',
     Ground: 'Connect abstract concepts to concrete examples.',
     Reframe: 'Approach from a fundamentally different angle.',
+    Generate: 'Generate multimedia (image, audio, video, document) or text from a prompt. Keyword: format="image"|"audio"|"video"|"document"|"text" (default).',
     Explain: 'Justify reasoning for a specific step or decision.',
     Confidence: 'Self-assess certainty (0.0-1.0).',
     Benchmark: 'Evaluate output quality against named criteria.',

@@ -12,7 +12,8 @@ export type OrchidValue =
   | OrchidDict
   | OrchidCallable
   | OrchidAgent
-  | OrchidEvent;
+  | OrchidEvent
+  | OrchidAsset;
 
 export interface OrchidString {
   kind: 'string';
@@ -66,6 +67,28 @@ export interface OrchidEvent {
   payload: OrchidValue;
 }
 
+/**
+ * Multimedia asset produced by Generate() — image, audio, video, or document.
+ * At least one of path, url, or data must be set.
+ */
+export type GenerateFormat = 'text' | 'image' | 'audio' | 'video' | 'document';
+
+export interface OrchidAsset {
+  kind: 'asset';
+  /** Semantic type for downstream use (image, audio, video, document). */
+  mediaType: GenerateFormat;
+  /** MIME type, e.g. image/png, audio/mpeg, video/mp4. */
+  mimeType: string;
+  /** File path if the asset was written to disk. */
+  path?: string;
+  /** URL if the asset is hosted (or data URL for inline). */
+  url?: string;
+  /** Inline base64 data if not path/url. */
+  data?: string;
+  /** Optional short description (e.g. from the prompt). */
+  description?: string;
+}
+
 // ─── Constructors ────────────────────────────────────
 
 export function orchidString(value: string): OrchidString {
@@ -92,6 +115,19 @@ export function orchidDict(entries: Map<string, OrchidValue>): OrchidDict {
   return { kind: 'dict', entries };
 }
 
+export function orchidAsset(
+  mediaType: OrchidAsset['mediaType'],
+  mimeType: string,
+  options: { path?: string; url?: string; data?: string; description?: string } = {}
+): OrchidAsset {
+  return {
+    kind: 'asset',
+    mediaType,
+    mimeType,
+    ...options,
+  };
+}
+
 // ─── Utilities ───────────────────────────────────────
 
 export function isTruthy(value: OrchidValue): boolean {
@@ -102,6 +138,7 @@ export function isTruthy(value: OrchidValue): boolean {
     case 'string': return value.value.length > 0;
     case 'list': return value.elements.length > 0;
     case 'dict': return value.entries.size > 0;
+    case 'asset': return !!(value.path || value.url || (value.data && value.data.length > 0));
     default: return true;
   }
 }
@@ -121,6 +158,12 @@ export function valueToString(value: OrchidValue): string {
     case 'callable': return `<${value.isAgent ? 'agent' : 'macro'} ${value.name}>`;
     case 'agent': return `<agent-instance ${value.name}>`;
     case 'event': return `<event ${value.name}: ${valueToString(value.payload)}>`;
+    case 'asset': {
+      if (value.path) return value.path;
+      if (value.url) return value.url;
+      if (value.data) return `data:${value.mimeType};base64,${value.data.slice(0, 32)}...`;
+      return `[${value.mediaType}: ${value.mimeType}]`;
+    }
   }
 }
 
@@ -136,6 +179,7 @@ export function valuesEqual(a: OrchidValue, b: OrchidValue): boolean {
     case 'number': return a.value === (b as OrchidNumber).value;
     case 'boolean': return a.value === (b as OrchidBoolean).value;
     case 'null': return true;
+    case 'asset': return a === b; // reference equality for assets
     default: return a === b;
   }
 }

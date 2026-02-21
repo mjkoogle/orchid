@@ -12,7 +12,7 @@
  * run scripts against a shared API key with limited quotas.
  */
 
-import { OrchidProvider, TagInfo } from './provider';
+import { OrchidProvider, TagInfo, ExecuteOptions } from './provider';
 import { OrchidValue, orchidString } from './values';
 
 // ─── Configuration ──────────────────────────────────────
@@ -183,6 +183,7 @@ export class SandboxProvider implements OrchidProvider {
     input: string,
     context: Record<string, string>,
     tags: TagInfo[],
+    options?: ExecuteOptions,
   ): Promise<OrchidValue> {
     this.checkBlockedOperation(operation);
     this.enforceRateLimits();
@@ -198,7 +199,7 @@ export class SandboxProvider implements OrchidProvider {
     this.sessionRequestCount++;
     this.estimateTokens(sanitizedInput);
 
-    return this.inner.execute(operation, sanitizedInput, sanitizedContext, tags);
+    return this.inner.execute(operation, sanitizedInput, sanitizedContext, tags, options);
   }
 
   async search(query: string, tags: TagInfo[]): Promise<OrchidValue> {
@@ -234,6 +235,22 @@ export class SandboxProvider implements OrchidProvider {
     this.sessionRequestCount++;
 
     return this.inner.toolCall(namespace, operation, args, tags);
+  }
+
+  async generate(
+    prompt: string,
+    format: import('./values').GenerateFormat,
+    tags: TagInfo[],
+  ): Promise<OrchidValue> {
+    this.checkBlockedOperation('Generate');
+    this.enforceRateLimits();
+    const sanitizedPrompt = this.sanitize(prompt);
+    this.enforceInputLength(sanitizedPrompt);
+
+    this.sessionRequestCount++;
+    this.estimateTokens(sanitizedPrompt);
+
+    return this.inner.generate(sanitizedPrompt, format, tags);
   }
 
   // ─── Public Status Methods ────────────────────────────

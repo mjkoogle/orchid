@@ -422,6 +422,9 @@ Reasoning macros are named cognitive operations that shape *how the agent reason
 | `Abstract`         | `Abstract(specifics)`         | Extract general principles from specific instances.     |
 | `Ground`           | `Ground(abstraction)`         | Connect abstract concepts to concrete examples.         |
 | `Reframe`          | `Reframe(problem)`            | Approach from a fundamentally different angle.          |
+| `Generate`         | `Generate(prompt, format=…)`   | Generate multimedia or text. `format` is a keyword argument: `image`, `audio`, `video`, `document`, or `text` (default). Returns an **OrchidAsset** (path/url/data + mimeType) for non-text; text returns a string. Image/audio/video/document typically require an MCP server or plugin; the Claude provider supports only `text`. |
+
+**Operating on generated media.** The same reasoning macros (Critique, Refine, CoT, ELI5, etc.) accept **OrchidAsset** as input. When the first argument is an asset (e.g. a generated image), the runtime passes it to the provider as an attachment; the provider can then run vision/multimodal (e.g. Claude analyzing the image). Example: `cover := Generate("dog", format="image")` then `critique := Critique(cover)` or `Refine(cover, "focus on composition")` — the macro operates on the media itself, not just the prompt. Providers that support vision (e.g. Claude with image blocks) will receive the asset; others may fall back to a text description.
 
 ### 5.6 Custom Macro Definition
 
@@ -1433,7 +1436,7 @@ The following macros are available in all Orchid environments without import:
 **Critique:** Critique, RedTeam, Steelman, DevilsAdvocate, Counterfactual, Validate
 **Synthesis:** Refine, Consensus, Debate, Synthesize, Reconcile, Prioritize
 **Communication:** ELI5, Formal, Analogize, Socratic, Narrate, Translate
-**Generative:** Creative, Brainstorm, Abstract, Ground, Reframe
+**Generative:** Creative, Brainstorm, Abstract, Ground, Reframe, Generate
 **Meta:** Explain, Confidence, Benchmark, Trace, Checkpoint, Rollback, Reflect, Cost, Elapsed
 
 ## Appendix C: Comparison with Existing Approaches

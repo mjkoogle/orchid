@@ -48,6 +48,16 @@ describe('SandboxProvider', () => {
         .rejects.toThrow(/Session limit/);
     });
 
+    it('should count Generate toward session limit', async () => {
+      const sandbox = new SandboxProvider(inner, { maxRequestsPerSession: 2 });
+
+      await sandbox.generate('poem', 'text', []);
+      await sandbox.generate('logo', 'image', []);
+
+      await expect(sandbox.generate('more', 'text', []))
+        .rejects.toThrow(/Session limit/);
+    });
+
     it('should report usage statistics', async () => {
       const sandbox = new SandboxProvider(inner, { maxRequestsPerSession: 10 });
 
@@ -200,6 +210,15 @@ describe('SandboxProvider', () => {
         .rejects.toThrow(/not available in sandbox/);
     });
 
+    it('should block Generate when in blockedOperations', async () => {
+      const sandbox = new SandboxProvider(inner, {
+        blockedOperations: ['Generate'],
+      });
+
+      await expect(sandbox.generate('art', 'image', []))
+        .rejects.toThrow(/not available in sandbox/);
+    });
+
     it('should allow non-blocked operations', async () => {
       const sandbox = new SandboxProvider(inner, {
         blockedOperations: ['RedTeam'],
@@ -260,6 +279,7 @@ describe('SandboxProvider', () => {
         search: jest.fn().mockResolvedValue(orchidString('search result')),
         confidence: jest.fn().mockResolvedValue(0.75),
         toolCall: jest.fn().mockResolvedValue(orchidString('tool result')),
+        generate: jest.fn().mockResolvedValue(orchidString('generated')),
       };
 
       const sandbox = new SandboxProvider(mockProvider, { enableSanitization: true });
@@ -271,6 +291,7 @@ describe('SandboxProvider', () => {
         'analyze this topic',
         {},
         [],
+        undefined,
       );
     });
 
@@ -280,6 +301,7 @@ describe('SandboxProvider', () => {
         search: jest.fn().mockResolvedValue(orchidString('search result')),
         confidence: jest.fn().mockResolvedValue(0.75),
         toolCall: jest.fn().mockResolvedValue(orchidString('tool result')),
+        generate: jest.fn().mockResolvedValue(orchidString('generated')),
       };
 
       const sandbox = new SandboxProvider(mockProvider);

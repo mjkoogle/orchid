@@ -147,7 +147,7 @@ node dist/cli.js --parse examples/deep_research.orch
 **Critique:** `Critique`, `RedTeam`, `Steelman`, `DevilsAdvocate`, `Counterfactual`, `Validate`
 **Synthesis:** `Refine`, `Consensus`, `Debate`, `Synthesize`, `Reconcile`, `Prioritize`
 **Communication:** `ELI5`, `Formal`, `Analogize`, `Socratic`, `Narrate`, `Translate`
-**Generative:** `Creative`, `Brainstorm`, `Abstract`, `Ground`, `Reframe`
+**Generative:** `Creative`, `Brainstorm`, `Abstract`, `Ground`, `Reframe`, `Generate`
 **Meta:** `Reflect`, `Explain`, `Summarize`, `Confidence`, `Trace`, `Cost`
 
 ### Operators

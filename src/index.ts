@@ -12,17 +12,20 @@ export {
   OrchidNull,
   OrchidList,
   OrchidDict,
+  OrchidAsset,
+  GenerateFormat,
   orchidString,
   orchidNumber,
   orchidBoolean,
   orchidNull,
   orchidList,
   orchidDict,
+  orchidAsset,
   isTruthy,
   valueToString,
   valuesEqual,
 } from './runtime/values';
-export { OrchidProvider, ConsoleProvider, TagInfo } from './runtime/provider';
+export { OrchidProvider, ConsoleProvider, TagInfo, ExecuteOptions } from './runtime/provider';
 export { ClaudeProvider, ClaudeProviderOptions } from './runtime/claude-provider';
 export { SandboxProvider, SandboxLimits, SandboxUsage, SandboxError } from './runtime/sandbox-provider';
 export { MCPManager, MCPServerConfig, OrchidConfig, MCPToolInfo, MCPError } from './runtime/mcp-manager';
