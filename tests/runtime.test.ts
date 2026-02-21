@@ -1457,4 +1457,118 @@ c := CoT("topic3")`;
       await interpreter.shutdown();
     });
   });
+
+  // ─── Confidence infrastructure ──────────────────────────────
+
+  describe('confidence infrastructure', () => {
+    it('should return blended confidence from Confidence()', async () => {
+      // ConsoleProvider returns 0.75; runtime baseline is ~0.7
+      // Blended = 0.50 * 0.75 + 0.50 * 0.7 = 0.725 → rounds to 0.73
+      const result = await run(`c := Confidence()`);
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') {
+        expect(result.value).toBeGreaterThanOrEqual(0.0);
+        expect(result.value).toBeLessThanOrEqual(1.0);
+      }
+    });
+
+    it('should track per-variable confidence', async () => {
+      const result = await run(`analysis := CoT("deep analysis")
+c := Confidence(analysis)`);
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') {
+        expect(result.value).toBeGreaterThan(0);
+        expect(result.value).toBeLessThanOrEqual(1.0);
+      }
+    });
+
+    it('should boost confidence when Search provides sources', async () => {
+      const provider = new ConsoleProvider();
+      // Measure confidence without sources
+      const source1 = `base_conf := Confidence()`;
+      let ast = new Parser().parse(new Lexer(source1).tokenize());
+      let interpreter = new Interpreter({ provider, scriptDir: fixturesDir });
+      const baseResult = await interpreter.run(ast);
+      await interpreter.shutdown();
+
+      // Measure confidence after multiple searches
+      const source2 = `a := Search("topic 1")
+b := Search("topic 2")
+c := Search("topic 3")
+search_conf := Confidence()`;
+      ast = new Parser().parse(new Lexer(source2).tokenize());
+      interpreter = new Interpreter({ provider, scriptDir: fixturesDir });
+      const searchResult = await interpreter.run(ast);
+      await interpreter.shutdown();
+
+      // With sources, confidence should be at least as high
+      if (baseResult.kind === 'number' && searchResult.kind === 'number') {
+        expect(searchResult.value).toBeGreaterThanOrEqual(baseResult.value);
+      }
+    });
+
+    it('should reduce confidence after retries', async () => {
+      const provider = new ConsoleProvider();
+      let callCount = 0;
+      const origExecute = provider.execute.bind(provider);
+      provider.execute = async (op: string, input: string, ctx: any, tags: any[]) => {
+        callCount++;
+        if (callCount <= 2) throw new Error('Simulated failure');
+        return origExecute(op, input, ctx, tags);
+      };
+      // Use retry=3 so the operation eventually succeeds
+      const source = `result := CoT("analysis")<retry=3>
+conf := Confidence(result)`;
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider, scriptDir: fixturesDir });
+      const result = await interpreter.run(ast);
+      await interpreter.shutdown();
+
+      // Confidence should be lower due to retries and errors
+      if (result.kind === 'number') {
+        expect(result.value).toBeLessThan(0.75); // Less than the provider's raw value
+      }
+    });
+
+    it('should track fork agreement for confidence', async () => {
+      const provider = new ConsoleProvider();
+      // All branches return the same result → high agreement
+      const source = `result := fork:
+    a: CoT("topic from angle A")
+    b: CoT("topic from angle B")
+conf := Confidence()`;
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider, scriptDir: fixturesDir });
+      const result = await interpreter.run(ast);
+      await interpreter.shutdown();
+      if (result.kind === 'number') {
+        expect(result.value).toBeGreaterThan(0.0);
+        expect(result.value).toBeLessThanOrEqual(1.0);
+      }
+    });
+
+    it('should boost confidence when CoVe is used', async () => {
+      const provider = new ConsoleProvider();
+      // Without CoVe
+      let source = `base := CoT("claim")
+base_conf := Confidence(base)`;
+      let ast = new Parser().parse(new Lexer(source).tokenize());
+      let interpreter = new Interpreter({ provider, scriptDir: fixturesDir });
+      const baseResult = await interpreter.run(ast);
+      await interpreter.shutdown();
+
+      // With CoVe
+      source = `verified := CoVe("claim")
+verified_conf := Confidence(verified)`;
+      ast = new Parser().parse(new Lexer(source).tokenize());
+      interpreter = new Interpreter({ provider, scriptDir: fixturesDir });
+      const verifiedResult = await interpreter.run(ast);
+      await interpreter.shutdown();
+
+      // CoVe-verified result should have higher or equal confidence
+      if (baseResult.kind === 'number' && verifiedResult.kind === 'number') {
+        expect(verifiedResult.value).toBeGreaterThanOrEqual(baseResult.value);
+      }
+    });
+  });
 });

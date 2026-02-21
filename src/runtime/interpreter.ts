@@ -21,6 +21,7 @@ import { BUILTIN_MACROS, META_OPERATIONS } from './builtins';
 import { MCPManager } from './mcp-manager';
 import { OrchidPlugin, PluginContext } from './plugin';
 import { StatusReporter, SilentStatusReporter } from './status';
+import { ConfidenceTracker } from './confidence';
 
 /** Sentinel thrown to implement return statements. */
 class ReturnSignal {
@@ -89,6 +90,8 @@ export class Interpreter {
   /** Accumulated context size (character count) for ContextOverflow detection. */
   private contextSize = 0;
   private readonly maxContextSize = 1_000_000; // 1M chars ≈ ~250K tokens
+  /** Runtime confidence signal tracker (spec §8.1). */
+  private confidenceTracker: ConfidenceTracker;
 
   constructor(options: InterpreterOptions) {
     this.provider = options.provider;
@@ -97,6 +100,7 @@ export class Interpreter {
     this.traceEnabled = options.trace ?? false;
     this.scriptDir = options.scriptDir ?? process.cwd();
     this.status = options.status ?? new SilentStatusReporter();
+    this.confidenceTracker = new ConfidenceTracker();
   }
 
   async run(program: AST.Program): Promise<OrchidValue> {
@@ -349,9 +353,11 @@ export class Interpreter {
       for (let i = 0; i < targets.length; i++) {
         const v = i < value.elements.length ? value.elements[i] : orchidNull();
         env.set(targets[i].name, v);
+        this.confidenceTracker.recordAssignment(targets[i].name);
       }
     } else {
       env.set(node.target.name, value);
+      this.confidenceTracker.recordAssignment(node.target.name);
 
       // <frozen>: mark variable as immutable if the value came from a frozen operation
       if (this.nodeHasFrozenTag(node.value)) {
@@ -404,6 +410,8 @@ export class Interpreter {
           this.provider.search(query, tags),
           tags, node.position,
         );
+        // Track as a data source for confidence
+        this.confidenceTracker.recordSource();
         // Throw DataUnavailable if the search returned nothing meaningful
         if (result.kind === 'null' || (result.kind === 'string' && result.value.trim() === '')) {
           throw new OrchidError('DataUnavailable', `Search returned no results for: "${query}"`, node.position);
@@ -414,11 +422,24 @@ export class Interpreter {
 
     if (name === 'Confidence') {
       const input = await this.resolveArgs(node.args, env);
-      const scope = input.length > 0 ? valueToString(input[0]) : undefined;
+      // Resolve scope: if the argument is a variable name, use it for per-variable tracking
+      let scope: string | undefined;
+      if (node.args.length > 0 && node.args[0].value.type === 'Identifier') {
+        scope = (node.args[0].value as AST.Identifier).name;
+      } else if (input.length > 0) {
+        scope = valueToString(input[0]);
+      }
       this.status.start('Assessing confidence...');
-      const conf = await this.provider.confidence(scope);
-      this.status.succeed(`Confidence: ${conf}`);
-      return orchidNumber(conf);
+      // Get the LLM's subjective assessment
+      const providerConf = await this.provider.confidence(scope);
+      // Blend with runtime signals (spec §8.1: hybrid confidence model)
+      const blended = this.confidenceTracker.blend(providerConf, scope);
+      if (this.traceEnabled) {
+        const signals = this.confidenceTracker.getSignals(scope);
+        this.trace(`Confidence(${scope ?? 'global'}): provider=${providerConf}, blended=${blended}, signals=${JSON.stringify(signals)}`);
+      }
+      this.status.succeed(`Confidence: ${blended}`);
+      return orchidNumber(blended);
     }
 
     if (name === 'Checkpoint') {
@@ -543,10 +564,15 @@ export class Interpreter {
       const execContext = this.hasTag(tags, 'isolated') ? {} : context;
 
       return this.withTagBehaviors(name, inputStr, tags, async () => {
-        return this.withTimeout(
+        const result = await this.withTimeout(
           this.provider.execute(name, inputStr, execContext, tags),
           tags, node.position,
         );
+        // Track confidence signals for specific operations
+        if (name === 'CoVe') this.confidenceTracker.recordCoVeVerification();
+        if (name === 'Search') this.confidenceTracker.recordSource();
+        this.confidenceTracker.recordOperationStep();
+        return result;
       }, node.position);
     }
 
@@ -1015,6 +1041,9 @@ export class Interpreter {
         entries.set(r.name, r.value);
       }
       this.status.succeed(`fork: ${branchLabel} complete`);
+      // Track fork agreement for confidence
+      const branchValues = results.map(r => r.value);
+      this.confidenceTracker.recordForkAgreement(this.computeForkAgreement(branchValues));
       const result = orchidDict(entries);
       this.implicitContext = result;
       return result;
@@ -1028,6 +1057,8 @@ export class Interpreter {
       })
     );
     this.status.succeed(`fork: ${branchCount} branches complete`);
+    // Track fork agreement for confidence
+    this.confidenceTracker.recordForkAgreement(this.computeForkAgreement(results));
     const result = orchidList(results);
     this.implicitContext = result;
     return result;
@@ -2088,6 +2119,48 @@ export class Interpreter {
   }
 
   /**
+   * Compute an agreement ratio (0.0–1.0) for fork branch results.
+   *
+   * Compares each pair of results: strings are compared by normalized
+   * content similarity (shared words), numbers by equality, and other
+   * types by exact equality. The returned ratio is the average pairwise
+   * agreement across all branch pairs.
+   */
+  private computeForkAgreement(results: OrchidValue[]): number {
+    if (results.length < 2) return 1.0;
+
+    let pairCount = 0;
+    let agreementSum = 0;
+
+    for (let i = 0; i < results.length; i++) {
+      for (let j = i + 1; j < results.length; j++) {
+        pairCount++;
+        const a = results[i];
+        const b = results[j];
+
+        if (valuesEqual(a, b)) {
+          agreementSum += 1.0;
+        } else if (a.kind === 'string' && b.kind === 'string') {
+          // Fuzzy string agreement: Jaccard similarity of word sets
+          const wordsA = new Set(a.value.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+          const wordsB = new Set(b.value.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+          if (wordsA.size === 0 && wordsB.size === 0) {
+            agreementSum += 1.0;
+          } else {
+            let intersection = 0;
+            for (const w of wordsA) { if (wordsB.has(w)) intersection++; }
+            const union = wordsA.size + wordsB.size - intersection;
+            agreementSum += union > 0 ? intersection / union : 0;
+          }
+        }
+        // Non-string, non-equal: 0 agreement (already initialized)
+      }
+    }
+
+    return pairCount > 0 ? agreementSum / pairCount : 1.0;
+  }
+
+  /**
    * Check if an AST node (typically an until condition) references Confidence().
    * Used to distinguish LowConfidence errors from generic ValidationErrors.
    */
@@ -2204,10 +2277,13 @@ export class Interpreter {
         return result;
       } catch (e) {
         lastError = e;
+        // Track retry and error signals for confidence
+        this.confidenceTracker.recordError();
         if (!suppressStatus) {
           this.status.fail(`${operationName} failed`);
         }
         if (attempt < maxAttempts - 1) {
+          this.confidenceTracker.recordRetry();
           if (this.traceEnabled) this.trace(`Retry ${attempt + 1}/${maxAttempts} for ${operationName}`);
         }
       }

@@ -32,6 +32,7 @@ export { MCP_REGISTRY, lookupServer, searchRegistry, listRegistry, RegistryEntry
 export { installServer, installFromScript, parseRequiredServers, InstallResult } from './runtime/mcp-install';
 export { searchNpm, fetchCatalog, saveCache, loadCache, searchCache, deriveServerName, NpmPackageResult } from './runtime/mcp-remote-registry';
 export { OrchidPlugin, PluginOperation, PluginContext } from './runtime/plugin';
+export { ConfidenceTracker, ConfidenceSignals } from './runtime/confidence';
 
 import { Lexer } from './lexer/lexer';
 import { Parser } from './parser/parser';
