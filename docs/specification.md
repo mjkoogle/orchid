@@ -28,13 +28,13 @@ sources := fork:
     academic: Search("quantum computing breakthroughs 2024")
     industry: Search("quantum computing commercial applications")
 
-vetted := CoVe(sources)                           # verify claims against evidence
-analysis := CoT(vetted)<deep>                      # chain-of-thought reasoning
+vetted := CoVe(sources)                              # verify claims against evidence
+analysis := CoT(vetted)<deep>                        # chain-of-thought reasoning
 
 if Confidence(analysis) > 0.7:
-    Formal(analysis)<cite>                         # high confidence → rigorous report
+    Formal(analysis)<cite>                           # high confidence → rigorous report
 else:
-    ELI5(analysis) + Explain("uncertainty areas")  # low confidence → be transparent
+    ELI5(analysis) + Explain("uncertainty areas")    # low confidence → be transparent
 ```
 
 Read it aloud. You don't need to be a programmer to understand what this agent will do: search two source categories in parallel, fact-check the results, think deeply about them, then choose an output format based on how confident it is. That's the point.
@@ -94,7 +94,7 @@ The underscore `_` refers to the output of the most recent operation, similar to
 
 ```orchid
 Search("renewable energy trends")
-CoT("summarize key findings from: $_")   # explicit reference
+CoT("summarize key findings from: $_")    # explicit reference
 CoVe                                      # implicit: operates on _
 ELI5                                      # implicit: operates on _
 ```
@@ -300,7 +300,7 @@ Use `*` for literal string concatenation and `+` for intelligent synthesis.
 ```orchid
 market := CoT("market analysis")
 technical := CoT("technical analysis")
-report := market + technical   # Agent synthesizes both perspectives
+report := market + technical    # Agent synthesizes both perspectives
 total := subtotal + tax         # Arithmetic addition
 ```
 
@@ -319,21 +319,21 @@ The arithmetic operators follow a clean symmetry for strings: `*` and `/` are **
 **Add (`+`):** For numbers, standard addition. For strings, semantic synthesis — the LLM combines both inputs into a coherent, integrated result rather than simply concatenating them.
 
 ```orchid
-report := market_analysis + technical_analysis   # Agent synthesizes both perspectives
+report := market_analysis + technical_analysis    # Agent synthesizes both perspectives
 total := subtotal + tax                           # Arithmetic addition
 ```
 
 **Multiply (`*`):** For numbers, standard multiplication. For strings, direct concatenation (no separator). Use `*` when you want literal joining; use `+` when you want the agent to synthesize.
 
 ```orchid
-greeting := "Hello, " * name    # "Hello, Alice"
+greeting := "Hello, " * name     # "Hello, Alice"
 area := width * height           # 50
 ```
 
 **Divide (`/`):** For numbers, standard division. For strings, literal removal — all occurrences of the right operand are removed from the left.
 
 ```orchid
-clean := "the quick the fox" / "the "   # "quick fox"
+clean := "the quick the fox" / "the "    # "quick fox"
 half := total / 2                        # 50.0
 ```
 
@@ -442,8 +442,8 @@ macro ThreatModel(system)<pure>:
     return Formal(mitigations)
 
 # Call-site tags augment definition-time tags
-result := ThreatModel(spec)                # inherits <pure>
-result := ThreatModel(spec)<deep>          # adds <deep>, keeps <pure>
+result := ThreatModel(spec)                 # inherits <pure>
+result := ThreatModel(spec)<deep>           # adds <deep>, keeps <pure>
 result := ThreatModel(spec)<quick, private> # quick pass, suppress from logs
 ```
 
