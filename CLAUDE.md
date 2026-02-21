@@ -37,7 +37,7 @@ orchid/
 │       ├── plugin.ts                   # JS/TS plugin interface
 │       └── status.ts                   # Terminal spinner/status display
 ├── tests/                              # Jest test suites (12 files, ~3900 lines)
-├── examples/                           # .orch example scripts (7 files)
+├── examples/                           # .orch example scripts (8 files)
 ├── docs/
 │   └── specification.md                # Full language specification with EBNF grammar
 ├── dist/                               # Compiled JS output (git-ignored)
@@ -148,7 +148,7 @@ node dist/cli.js --parse examples/deep_research.orch
 **Synthesis:** `Refine`, `Consensus`, `Debate`, `Synthesize`, `Reconcile`, `Prioritize`
 **Communication:** `ELI5`, `Formal`, `Analogize`, `Socratic`, `Narrate`, `Translate`
 **Generative:** `Creative`, `Brainstorm`, `Abstract`, `Ground`, `Reframe`
-**Meta:** `Reflect`, `Explain`, `Summarize`, `Confidence`, `Trace`, `Cost`
+**Meta:** `Reflect`, `Explain`, `Summarize`, `Confidence`, `Trace`, `Cost`, `Checkpoint`, `Rollback`
 
 ### Operators
 
@@ -193,6 +193,10 @@ results := fork item in list:          # parallel map → list
 content := filesystem:read_text_file(path="README.md")
 filesystem:write_file(path="out.md", content=result)
 ```
+
+### Bracket-Count Syntax
+
+Some macros accept a count parameter: `Debate[3]("topic")`, `Brainstorm[10]("ideas")`. See specification.md §5.6.
 
 ### Tags (Behavior Modifiers)
 

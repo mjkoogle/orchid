@@ -901,6 +901,213 @@ x := 42`;
     });
   });
 
+  // ─── Checkpoint / Rollback ──────────────────────────────
+
+  describe('Checkpoint and Rollback', () => {
+    it('should save and restore variable state', async () => {
+      const source = `x := "original"
+Checkpoint("snap")
+x := "modified"
+Rollback("snap")
+result := x`;
+      const result = await run(source);
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('original');
+    });
+
+    it('should save and restore implicit context', async () => {
+      const source = `Search("first topic")
+Checkpoint("ctx_snap")
+Search("second topic")
+Rollback("ctx_snap")
+result := CoT("summarize")`;
+      const result = await run(source);
+      // After rollback, the implicit context should relate to "first topic"
+      expect(result.kind).toBe('string');
+      expect(valueToString(result)).toContain('CoT');
+    });
+
+    it('should support multiple named checkpoints', async () => {
+      const source = `x := 1
+Checkpoint("a")
+x := 2
+Checkpoint("b")
+x := 3
+Rollback("a")
+result := x`;
+      const result = await run(source);
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(1);
+    });
+
+    it('should overwrite checkpoint on re-save with same label', async () => {
+      const source = `x := 1
+Checkpoint("snap")
+x := 2
+Checkpoint("snap")
+x := 3
+Rollback("snap")
+result := x`;
+      const result = await run(source);
+      // Second checkpoint at x=2 overwrites first, so rollback restores x=2
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(2);
+    });
+
+    it('should use default label when none specified', async () => {
+      const source = `x := "before"
+Checkpoint()
+x := "after"
+Rollback()
+result := x`;
+      const result = await run(source);
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('before');
+    });
+
+    it('should throw RuntimeError for missing checkpoint', async () => {
+      await expect(run('Rollback("nonexistent")'))
+        .rejects.toThrow('No checkpoint found');
+    });
+
+    it('should work inside conditional branches', async () => {
+      const source = `x := "start"
+Checkpoint("safe")
+flag := true
+if flag:
+    x := "changed"
+    Rollback("safe")
+result := x`;
+      const result = await run(source);
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('start');
+    });
+  });
+
+  // ─── Arithmetic edge cases ─────────────────────────────
+
+  describe('arithmetic edge cases', () => {
+    it('should return Infinity for division by zero', async () => {
+      const result = await run('x := 10 / 0');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(Infinity);
+    });
+
+    it('should return -Infinity for negative division by zero', async () => {
+      const result = await run('x := -10 / 0');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(-Infinity);
+    });
+
+    it('should return NaN for 0 / 0', async () => {
+      const result = await run('x := 0 / 0');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBeNaN();
+    });
+
+    it('should handle multiplication by zero', async () => {
+      const result = await run('x := 42 * 0');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(0);
+    });
+
+    it('should handle negative number arithmetic', async () => {
+      const result = await run('x := -5 * -3');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(15);
+    });
+
+    it('should handle floating point multiplication', async () => {
+      const result = await run('x := 0.1 * 10');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBeCloseTo(1.0);
+    });
+
+    it('should handle subtraction resulting in negative', async () => {
+      const result = await run('x := 3 - 10');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(-7);
+    });
+
+    it('should handle chained arithmetic', async () => {
+      const result = await run('x := 2 * 3 * 4');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(24);
+    });
+
+    it('should return null for non-numeric non-string arithmetic', async () => {
+      const result = await run('x := true * false');
+      expect(result.kind).toBe('null');
+    });
+
+    it('should handle very large numbers', async () => {
+      const result = await run('x := 999999999 * 999999999');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(999999999 * 999999999);
+    });
+  });
+
+  // ─── Import deeper nesting ──────────────────────────────
+
+  describe('import deeper nesting', () => {
+    it('should resolve deeply nested imports via string paths', async () => {
+      const source = `import "lib/deep/nested_mod" as deep
+result := deep.nested_value`;
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({
+        provider: new ConsoleProvider(),
+        scriptDir: fixturesDir,
+      });
+      const result = await interpreter.run(ast);
+      await interpreter.shutdown();
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('from-deep-nested');
+    });
+
+    it('should resolve multi-level chained imports', async () => {
+      const source = `import "lib/mid_layer" as mid
+result := mid.mid_value`;
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({
+        provider: new ConsoleProvider(),
+        scriptDir: fixturesDir,
+      });
+      const result = await interpreter.run(ast);
+      await interpreter.shutdown();
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('from-mid');
+    });
+
+    it('should access nested numeric values through imports', async () => {
+      const source = `import "lib/deep/nested_mod" as deep
+result := deep.nested_num`;
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({
+        provider: new ConsoleProvider(),
+        scriptDir: fixturesDir,
+      });
+      const result = await interpreter.run(ast);
+      await interpreter.shutdown();
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(99);
+    });
+
+    it('should handle multiple imports from different depths', async () => {
+      const source = `import "lib/utils" as utils
+import "lib/deep/nested_mod" as deep
+result := utils.max_retries`;
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({
+        provider: new ConsoleProvider(),
+        scriptDir: fixturesDir,
+      });
+      const result = await interpreter.run(ast);
+      await interpreter.shutdown();
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(3);
+    });
+  });
+
   // ─── Spec error types ─────────────────────────────────────
 
   describe('spec error types', () => {

@@ -1,0 +1,53 @@
+@orchid 0.1
+@name "Error Handling Patterns"
+@description "Demonstrates while loops, try/except, atomic blocks, and Checkpoint/Rollback"
+
+## Phase 1: While loop with iterative refinement
+draft := CoT("outline a guide to error handling best practices")
+attempts := 0
+
+while Confidence(draft) < 0.7:
+    draft := Refine(draft)
+    attempts += 1
+    if attempts >= 5:
+        Log("Max refinement attempts reached")
+        break
+
+## Phase 2: Try/except with typed error handling
+try:
+    data := Search("critical safety data")
+    verified := CoVe(data)
+except Timeout:
+    Log("Search timed out, using fallback")
+    verified := CoT("summarize known safety principles")<best_effort>
+except DataUnavailable:
+    Log("No data available")
+    verified := "No external data could be retrieved"
+
+## Phase 3: Atomic block for transactional reasoning
+###
+analysis := CoT(verified)<deep>
+critique := Critique(analysis)
+refined := Refine(analysis + critique)
+###
+
+## Phase 4: Checkpoint and Rollback
+Checkpoint("pre_output")
+
+report := Formal(refined)
+
+if Confidence(report) < 0.5:
+    Rollback("pre_output")
+    report := ELI5(refined) + Explain("areas of uncertainty")
+
+## Phase 5: Nested try inside atomic
+try:
+    ###
+    ambitious := RedTeam(report)
+    validated := Validate(ambitious, criteria="actionable and specific")
+    report := report + validated
+    ###
+except:
+    Log("RedTeam validation failed, keeping original report")
+
+Log(report)

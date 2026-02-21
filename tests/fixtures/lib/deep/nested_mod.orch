@@ -1,0 +1,2 @@
+nested_value := "from-deep-nested"
+nested_num := 99

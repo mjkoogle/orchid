@@ -423,7 +423,37 @@ Reasoning macros are named cognitive operations that shape *how the agent reason
 | `Ground`           | `Ground(abstraction)`         | Connect abstract concepts to concrete examples.         |
 | `Reframe`          | `Reframe(problem)`            | Approach from a fundamentally different angle.          |
 
-### 5.6 Custom Macro Definition
+### 5.6 Bracket-Count Syntax
+
+Several macros accept an optional count parameter via bracket notation: `Operation[n](args)`. The integer `n` controls how many results, viewpoints, or iterations the macro produces.
+
+```orchid
+# Debate with 3 viewpoints
+perspectives := Debate[3]("should we adopt microservices?")
+
+# Brainstorm 10 ideas
+ideas := Brainstorm[10]("ways to reduce API latency")
+
+# Debate with 2 sides (default if unspecified depends on runtime)
+pros_cons := Debate[2]("remote work vs office work")
+```
+
+The bracket-count is syntactically distinct from tags. `Brainstorm[10]("topic")` sets the *quantity* of outputs, while `Brainstorm("topic")<deep>` sets the *quality* of reasoning. They compose naturally:
+
+```orchid
+# 10 ideas, each explored thoroughly
+ideas := Brainstorm[10]("reduce latency")<deep>
+```
+
+Macros that support bracket-count:
+
+| Macro        | Default `n` | Behavior                                         |
+|--------------|-------------|--------------------------------------------------|
+| `Debate[n]`  | 2           | Generate n distinct viewpoints, then synthesize.  |
+| `Brainstorm[n]` | 5        | Generate n distinct ideas or approaches.          |
+| `Refine[n]`  | 1           | Run n iterative refinement passes.                |
+
+### 5.7 Custom Macro Definition
 
 Macros extend the standard library with reusable, parameterized cognitive patterns. Tags can be applied at **definition time** (defaults for every invocation) or at **call site** (per-invocation override).
 
@@ -1324,9 +1354,10 @@ postfix_expr   ::= primary ('.' IDENTIFIER | '(' args? ')' | '[' expression ']')
 primary        ::= operation | IDENTIFIER | literal | '(' expression ')'
                  | listen_expr | stream_expr
 
-operation      ::= IDENTIFIER '(' args? ')' tags?
+operation      ::= IDENTIFIER count? '(' args? ')' tags?
                |   IDENTIFIER tags?
                |   namespace ':' IDENTIFIER '(' args? ')' tags?
+count          ::= '[' INTEGER ']'
 
 args           ::= arg (',' arg)*
 arg            ::= expression | IDENTIFIER '=' expression
