@@ -420,13 +420,13 @@ Reasoning macros are named cognitive operations that shape *how the agent reason
 Macros extend the standard library with reusable, parameterized cognitive patterns. Tags can be applied at **definition time** (defaults for every invocation) or at **call site** (per-invocation override).
 
 Tag resolution rules:
-- Call-site tags from different categories than definition tags are **additive**. A macro defined `<idempotent>` and called `<private>` gets both.
+- Call-site tags from different categories than definition tags are **additive**. A macro defined `<pure>` and called `<private>` gets both.
 - Call-site tags that conflict with definition tags **override**. A macro defined `<deep>` and called `<quick>` runs as `<quick>`. The caller knows their context best.
 - Definition tags not contradicted by the call site are **inherited**.
 
 ```orchid
 # Definition-time tags set defaults
-macro ThreatModel(system)<idempotent>:
+macro ThreatModel(system)<pure>:
     surface := Decompose("attack surface of $system")
     threats := RedTeam(surface)
     ranked := Prioritize(threats, criteria="likelihood * impact")
@@ -434,8 +434,8 @@ macro ThreatModel(system)<idempotent>:
     return Formal(mitigations)
 
 # Call-site tags augment definition-time tags
-result := ThreatModel(spec)                # inherits <idempotent>
-result := ThreatModel(spec)<deep>          # adds <deep>, keeps <idempotent>
+result := ThreatModel(spec)                # inherits <pure>
+result := ThreatModel(spec)<deep>          # adds <deep>, keeps <pure>
 result := ThreatModel(spec)<quick, private> # quick pass, suppress from logs
 ```
 
@@ -478,7 +478,7 @@ Operation("args")<tag1, tag2>
 |------------------|--------------------------------------------------------------------------|
 | `<retry>`        | Retry on failure. `<retry=3>` for max attempts, `<retry=3, backoff>`.   |
 | `<timeout=Ns>`   | Abort and return partial results after N seconds.                        |
-| `<idempotent>`   | Safe to re-execute. Runtime may deduplicate calls.                       |
+| `<pure>`         | No side effects. Safe to re-execute; runtime may cache and deduplicate.  |
 | `<cached>`       | Use cached results if available and fresh.                               |
 | `<fallback=X>`   | On failure, substitute value X.                                          |
 
@@ -961,7 +961,7 @@ Every operation executes within an implicit **context window**: the accumulated 
 | **Order**             | Sequential lines execute in order within a scope.                  |
 | **Atomicity**         | `### ... ###` blocks complete fully or roll back entirely.         |
 | **Isolation**         | Fork branches do not observe each other's intermediate states.     |
-| **Idempotency**       | Operations tagged `<idempotent>` can be safely retried by runtime. |
+| **Purity**            | Operations tagged `<pure>` can be safely cached and retried by runtime. |
 | **Graceful failure**  | `<best_effort>` operations never halt the pipeline.                |
 
 ### 11.3 Runtime Responsibilities

@@ -234,7 +234,7 @@ else:
 @orchid 0.1
 @name "Threat Model"
 
-macro ThreatModel(system)<idempotent>:
+macro ThreatModel(system)<pure>:
     surface := Decompose("attack surface of $system")
     threats := fork:
         spoofing: RedTeam("spoofing attacks on $surface")

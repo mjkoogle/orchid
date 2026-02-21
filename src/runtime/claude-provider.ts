@@ -195,7 +195,18 @@ const LIST_OPERATIONS = new Set(['Decompose', 'Brainstorm', 'Classify']);
 
 /** Tag-to-prompt modifiers */
 const TAG_MODIFIERS: Record<string, string> = {
+  // Execution tags
+  urgent: 'Prioritize speed over thoroughness. Skip non-essential verification and elaboration. Get to the answer fast.',
+  quick: 'Provide an abbreviated response. Be concise — no deep analysis, just the key points.',
   deep: 'Be extremely thorough and detailed in your analysis. Leave no stone unturned.',
+  strict: 'Zero tolerance for ambiguity. If anything is uncertain, flag it explicitly rather than assuming. Fail rather than guess.',
+  tentative: 'Low confidence is acceptable. Mark uncertain parts as provisional. Hedging and caveats are fine.',
+  best_effort: 'Do your best with available information. Partial or degraded results are acceptable — do not fail.',
+  // Output tags
+  verbose: 'Include your full reasoning trace in the output, not just the conclusion. Show all intermediate steps.',
+  raw: 'Return your unprocessed output. Do not summarize, format, or restructure. Provide the raw analysis.',
+  cite: 'Require source attribution for all claims. Every factual statement must include where it comes from.',
+  // Style tags
   brief: 'Be as concise as possible. Only the essential points.',
   creative: 'Push for unconventional, creative approaches. Prioritize novelty.',
   formal: 'Use formal, academic language and rigorous structure.',

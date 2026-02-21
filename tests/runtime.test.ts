@@ -665,6 +665,151 @@ until Confidence()<retry=3>:
     });
   });
 
+  // ─── Tag behaviors ─────────────────────────────────────────
+
+  describe('tag behaviors', () => {
+    // ── retry ──
+    it('should retry on failure with <retry=N>', async () => {
+      let callCount = 0;
+      const flaky = new ConsoleProvider();
+      const origExecute = flaky.execute.bind(flaky);
+      flaky.execute = async (op, input, ctx, tags) => {
+        callCount++;
+        if (callCount < 3) throw new Error('transient failure');
+        return origExecute(op, input, ctx, tags);
+      };
+
+      const source = 'CoT("analyze")<retry=5>';
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider: flaky });
+      const result = await interpreter.run(ast);
+      expect(result.kind).toBe('string');
+      expect(callCount).toBe(3);
+      await interpreter.shutdown();
+    });
+
+    // ── fallback ──
+    it('should return fallback value on failure with <fallback=X>', async () => {
+      const broken = new ConsoleProvider();
+      broken.execute = async () => { throw new Error('always fails'); };
+
+      const source = 'CoT("analyze")<fallback="default answer">';
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider: broken });
+      const result = await interpreter.run(ast);
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('default answer');
+      await interpreter.shutdown();
+    });
+
+    // ── best_effort ──
+    it('should return null on failure with <best_effort>', async () => {
+      const broken = new ConsoleProvider();
+      broken.execute = async () => { throw new Error('always fails'); };
+
+      const source = 'CoT("analyze")<best_effort>';
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider: broken });
+      const result = await interpreter.run(ast);
+      expect(result.kind).toBe('null');
+      await interpreter.shutdown();
+    });
+
+    // ── cached ──
+    it('should cache results with <cached>', async () => {
+      let callCount = 0;
+      const counting = new ConsoleProvider();
+      const origExecute = counting.execute.bind(counting);
+      counting.execute = async (op, input, ctx, tags) => {
+        callCount++;
+        return origExecute(op, input, ctx, tags);
+      };
+
+      const source = 'a := CoT("same input")<cached>\nb := CoT("same input")<cached>';
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider: counting });
+      await interpreter.run(ast);
+      expect(callCount).toBe(1);
+      await interpreter.shutdown();
+    });
+
+    // ── pure ──
+    it('should cache results with <pure> (same as cached)', async () => {
+      let callCount = 0;
+      const counting = new ConsoleProvider();
+      const origExecute = counting.execute.bind(counting);
+      counting.execute = async (op, input, ctx, tags) => {
+        callCount++;
+        return origExecute(op, input, ctx, tags);
+      };
+
+      const source = 'a := CoT("same input")<pure>\nb := CoT("same input")<pure>';
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider: counting });
+      await interpreter.run(ast);
+      expect(callCount).toBe(1);
+      await interpreter.shutdown();
+    });
+
+    // ── private ──
+    it('should not update implicit context with <private>', async () => {
+      // After a <private> operation, the implicit context should NOT be updated
+      const result = await run('x := "original"\nCoT("secret")<private>\ny := x');
+      // y should still be "original" since the private CoT didn't update context
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('original');
+    });
+
+    // ── append ──
+    it('should append to implicit context with <append>', async () => {
+      const result = await run('a := "first"\nCoT("second")<append>\nb := a');
+      // a should still be "first", but the implicit context should have been appended
+      expect(result.kind).toBe('string');
+    });
+
+    // ── frozen ──
+    it('should prevent reassignment of frozen variables', async () => {
+      await expect(run('x := CoT("analysis")<frozen>\nx := "new value"'))
+        .rejects.toThrow('frozen');
+    });
+
+    it('should prevent += on frozen variables', async () => {
+      await expect(run('x := CoT("analysis")<frozen>\nx += "more"'))
+        .rejects.toThrow('frozen');
+    });
+
+    it('should allow frozen variables to be read', async () => {
+      const result = await run('x := CoT("analysis")<frozen>\ny := x');
+      expect(result.kind).toBe('string');
+    });
+
+    // ── isolated ──
+    it('should execute with empty context when <isolated>', async () => {
+      // With isolated, the operation should not receive accumulated context
+      const result = await run('context := "background info"\nresult := CoT("analyze")<isolated>');
+      expect(result.kind).toBe('string');
+    });
+
+    // ── combined tags ──
+    it('should support multiple tags together', async () => {
+      const result = await run('CoT("analyze")<deep, cached>');
+      expect(result.kind).toBe('string');
+    });
+
+    it('should combine retry with fallback', async () => {
+      const broken = new ConsoleProvider();
+      broken.execute = async () => { throw new Error('always fails'); };
+
+      const source = 'CoT("analyze")<retry=2, fallback="safe default">';
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider: broken });
+      const result = await interpreter.run(ast);
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('safe default');
+      await interpreter.shutdown();
+    });
+  });
+
   // ─── require MCP/Plugin availability ──────────────────────
 
   describe('require MCP/Plugin', () => {

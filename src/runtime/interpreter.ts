@@ -82,6 +82,8 @@ export class Interpreter {
   private importStack: Set<string> = new Set(); // tracks in-progress imports for cycle detection
   private plugins: Map<string, PluginModule> = new Map(); // alias -> loaded plugin
   private status: StatusReporter;
+  private operationCache: Map<string, OrchidValue> = new Map();
+  private frozenVars: Set<string> = new Set();
 
   constructor(options: InterpreterOptions) {
     this.provider = options.provider;
@@ -326,6 +328,11 @@ export class Interpreter {
   // ─── Assignment ────────────────────────────────────────
 
   private async executeAssignment(node: AST.Assignment, env: Environment): Promise<OrchidValue> {
+    // Check frozen before reassignment
+    if (!Array.isArray(node.target) && this.frozenVars.has(node.target.name)) {
+      throw new OrchidError('RuntimeError', `Cannot reassign frozen variable '${node.target.name}'`, node.position);
+    }
+
     const value = await this.evaluate(node.value, env);
 
     if (Array.isArray(node.target)) {
@@ -340,6 +347,11 @@ export class Interpreter {
       }
     } else {
       env.set(node.target.name, value);
+
+      // <frozen>: mark variable as immutable if the value came from a frozen operation
+      if (this.nodeHasFrozenTag(node.value)) {
+        this.frozenVars.add(node.target.name);
+      }
     }
 
     this.implicitContext = value;
@@ -347,6 +359,9 @@ export class Interpreter {
   }
 
   private async executePlusAssignment(node: AST.PlusAssignment, env: Environment): Promise<OrchidValue> {
+    if (this.frozenVars.has(node.target.name)) {
+      throw new OrchidError('RuntimeError', `Cannot reassign frozen variable '${node.target.name}'`, node.position);
+    }
     const existing = env.get(node.target.name);
     const addition = await this.evaluate(node.value, env);
     const result = this.mergeValues(existing, addition);
@@ -379,19 +394,12 @@ export class Interpreter {
     if (name === 'Search') {
       const input = await this.resolveArgs(node.args, env);
       const query = input.length > 0 ? valueToString(input[0]) : valueToString(this.implicitContext);
-      this.status.start(`Search("${query.length > 50 ? query.slice(0, 47) + '...' : query}")`);
-      try {
-        const result = await this.withTimeout(
+      return this.withTagBehaviors('Search', query, tags, async () => {
+        return this.withTimeout(
           this.provider.search(query, tags),
           tags, node.position,
         );
-        this.status.succeed('Search complete');
-        this.implicitContext = result;
-        return result;
-      } catch (e) {
-        this.status.fail('Search failed');
-        throw e;
-      }
+      }, node.position);
     }
 
     if (name === 'Confidence') {
@@ -506,19 +514,15 @@ export class Interpreter {
         context['_count'] = valueToString(countVal);
       }
 
-      this.status.start(`${name}(...)`);
-      try {
-        const result = await this.withTimeout(
-          this.provider.execute(name, inputStr, context, tags),
+      // <isolated>: pass empty context to provider
+      const execContext = this.hasTag(tags, 'isolated') ? {} : context;
+
+      return this.withTagBehaviors(name, inputStr, tags, async () => {
+        return this.withTimeout(
+          this.provider.execute(name, inputStr, execContext, tags),
           tags, node.position,
         );
-        this.status.succeed(`${name} done`);
-        this.implicitContext = result;
-        return result;
-      } catch (e) {
-        this.status.fail(`${name} failed`);
-        throw e;
-      }
+      }, node.position);
     }
 
     // Unknown operation — try calling as a generic operation
@@ -526,19 +530,13 @@ export class Interpreter {
     const inputStr = input.length > 0
       ? valueToString(input[0])
       : valueToString(this.implicitContext);
-    this.status.start(`${name}(...)`);
-    try {
-      const result = await this.withTimeout(
+
+    return this.withTagBehaviors(name, inputStr, tags, async () => {
+      return this.withTimeout(
         this.provider.execute(name, inputStr, {}, tags),
         tags, node.position,
       );
-      this.status.succeed(`${name} done`);
-      this.implicitContext = result;
-      return result;
-    } catch (e) {
-      this.status.fail(`${name} failed`);
-      throw e;
-    }
+    }, node.position);
   }
 
   private async executeNamespacedOperation(node: AST.NamespacedOperation, env: Environment): Promise<OrchidValue> {
@@ -1962,6 +1960,126 @@ export class Interpreter {
         (error) => { clearTimeout(timer); reject(error); },
       );
     });
+  }
+
+  // ─── Tag Behaviors ─────────────────────────────────────
+
+  /**
+   * Check if a tag is present in a list of resolved tags.
+   */
+  private hasTag(tags: TagInfo[], name: string): boolean {
+    return tags.some(t => t.name === name);
+  }
+
+  /**
+   * Get a tag's value from a list of resolved tags.
+   */
+  private getTagValue(tags: TagInfo[], name: string): OrchidValue | undefined {
+    return tags.find(t => t.name === name)?.value;
+  }
+
+  /**
+   * Check if an AST node is an operation with a <frozen> tag.
+   */
+  private nodeHasFrozenTag(node: AST.Node): boolean {
+    if (node.type === 'Operation') {
+      return node.tags.some(t => t.name === 'frozen');
+    }
+    return false;
+  }
+
+  /**
+   * Wrap an operation execution with tag-driven behaviors:
+   * - <cached> / <pure>: return cached result if available
+   * - <retry=N>: retry on failure up to N times
+   * - <fallback=X>: return X on failure
+   * - <best_effort>: return null on failure instead of throwing
+   * - <private>: suppress status output
+   * - <silent>: suppress status output
+   * - <isolated>: execute with empty context passed to provider
+   */
+  private async withTagBehaviors(
+    operationName: string,
+    inputStr: string,
+    tags: TagInfo[],
+    execute: () => Promise<OrchidValue>,
+    position?: AST.Position,
+  ): Promise<OrchidValue> {
+    const isPrivate = this.hasTag(tags, 'private');
+    const isSilent = this.hasTag(tags, 'silent');
+    const suppressStatus = isPrivate || isSilent;
+
+    // <cached> / <pure>: check cache first
+    if (this.hasTag(tags, 'cached') || this.hasTag(tags, 'pure')) {
+      const cacheKey = `${operationName}:${inputStr}`;
+      const cached = this.operationCache.get(cacheKey);
+      if (cached) {
+        if (this.traceEnabled) this.trace(`Cache hit for ${operationName}`);
+        return cached;
+      }
+    }
+
+    // <retry=N>: determine retry count
+    const retryVal = this.getTagValue(tags, 'retry');
+    const maxAttempts = retryVal && retryVal.kind === 'number' ? retryVal.value : 1;
+
+    let lastError: unknown;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        if (!suppressStatus) {
+          this.status.start(`${operationName}(...)`);
+        }
+
+        const result = await execute();
+
+        if (!suppressStatus) {
+          this.status.succeed(`${operationName} done`);
+        }
+
+        // <cached> / <pure>: store in cache
+        if (this.hasTag(tags, 'cached') || this.hasTag(tags, 'pure')) {
+          const cacheKey = `${operationName}:${inputStr}`;
+          this.operationCache.set(cacheKey, result);
+        }
+
+        // Update implicit context (unless <private>)
+        if (!isPrivate) {
+          if (this.hasTag(tags, 'append') && this.implicitContext.kind !== 'null') {
+            // <append>: merge with existing context
+            this.implicitContext = this.mergeValues(this.implicitContext, result);
+          } else {
+            this.implicitContext = result;
+          }
+        }
+
+        return result;
+      } catch (e) {
+        lastError = e;
+        if (!suppressStatus) {
+          this.status.fail(`${operationName} failed`);
+        }
+        if (attempt < maxAttempts - 1) {
+          if (this.traceEnabled) this.trace(`Retry ${attempt + 1}/${maxAttempts} for ${operationName}`);
+        }
+      }
+    }
+
+    // All attempts failed — check fallback tags
+
+    // <fallback=X>: return fallback value
+    const fallbackVal = this.getTagValue(tags, 'fallback');
+    if (fallbackVal) {
+      if (this.traceEnabled) this.trace(`Using fallback for ${operationName}`);
+      return fallbackVal;
+    }
+
+    // <best_effort>: return null instead of throwing
+    if (this.hasTag(tags, 'best_effort')) {
+      if (this.traceEnabled) this.trace(`Best-effort null for ${operationName}`);
+      return orchidNull();
+    }
+
+    throw lastError;
   }
 
   // ─── Discover ───────────────────────────────────────────
