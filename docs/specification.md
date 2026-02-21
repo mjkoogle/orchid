@@ -248,7 +248,7 @@ else:
 |----------|-------------|------------------------------------------------------|-------------------------------------|
 | `:=`     | Assign      | Assign operation output to a name                    | `x := Search("topic")`             |
 | `+=`     | Append      | Merge a value into an existing variable              | `report += Creative("new angle")`   |
-| `+`      | Add / Merge | Numeric addition; context-aware merge for strings, lists, dicts | `full := research + analysis` |
+| `+`      | Add / Merge | Numeric addition; semantic synthesis for strings (LLM); concatenation for lists; merge for dicts | `full := research + analysis` |
 | `\|`     | Alternative | Try left; on failure or low confidence, try right    | `result := Search(a) \| Search(b)` |
 | `>>`     | Pipe        | Pass left output as right input                      | `Search("topic") >> CoT >> ELI5`   |
 
@@ -287,14 +287,15 @@ else:
 
 ### 4.1 Add / Merge Semantics
 
-The `+` operator has dual behavior depending on operand types. For numbers, it performs standard arithmetic addition. For all other types, it performs context-aware merging:
+The `+` operator has dual behavior depending on operand types. For numbers, it performs standard arithmetic addition. For strings and mixed types, it performs **semantic synthesis via the LLM** — producing an integrated combination rather than simple concatenation. For collections, it performs structural merging:
 
 - **Numbers:** arithmetic addition (`3 + 4` → `7`)
-- **Strings:** merge with paragraph separator (`a + b` → `"a\n\nb"`)
+- **Strings:** semantic synthesis via LLM — the agent combines both inputs into a unified result, resolving contradictions and preserving key points
 - **Lists:** concatenation (`[1,2] + [3,4]` → `[1,2,3,4]`)
 - **Dicts:** merge (right overwrites duplicate keys)
+- **Mixed types:** semantic synthesis via LLM
 
-Exact merge behavior for strings is implementation-defined; runtimes should document their strategy.
+Use `*` for literal string concatenation and `+` for intelligent synthesis.
 
 ```orchid
 market := CoT("market analysis")
@@ -313,7 +314,14 @@ data := API:Fetch(url) | Cache:Load(key) | Search("$query")<best_effort>
 
 ### 4.3 Arithmetic String Semantics
 
-The `*`, `/`, and `-` operators have dual behavior depending on operand types.
+The arithmetic operators follow a clean symmetry for strings: `*` and `/` are **literal** operations (direct concatenation and removal), while `+` and `-` are **semantic** operations (LLM-powered synthesis and subtraction).
+
+**Add (`+`):** For numbers, standard addition. For strings, semantic synthesis — the LLM combines both inputs into a coherent, integrated result rather than simply concatenating them.
+
+```orchid
+report := market_analysis + technical_analysis   # Agent synthesizes both perspectives
+total := subtotal + tax                           # Arithmetic addition
+```
 
 **Multiply (`*`):** For numbers, standard multiplication. For strings, direct concatenation (no separator). Use `*` when you want literal joining; use `+` when you want the agent to synthesize.
 

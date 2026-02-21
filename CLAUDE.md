@@ -153,7 +153,7 @@ node dist/cli.js --parse examples/deep_research.orch
 ### Operators
 
 **Composition:** `:=` (assign), `+=` (append), `|` (alternative), `>>` (pipe)
-**Arithmetic:** `+` (add / merge), `*` (multiply / string concat), `/` (divide / literal string removal), `-` (subtract / semantic string subtraction via LLM)
+**Arithmetic:** `+` (add / semantic synthesis via LLM), `*` (multiply / string concat), `/` (divide / literal string removal), `-` (subtract / semantic string subtraction via LLM)
 **Comparison:** `==`, `!=`, `>`, `<`, `>=`, `<=`
 **Logical:** `and`, `or`, `not`
 **Containment:** `in`

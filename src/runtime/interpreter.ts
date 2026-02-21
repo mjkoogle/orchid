@@ -364,7 +364,7 @@ export class Interpreter {
     }
     const existing = env.get(node.target.name);
     const addition = await this.evaluate(node.value, env);
-    const result = this.mergeValues(existing, addition);
+    const result = await this.mergeValues(existing, addition);
     env.assign(node.target.name, result);
     this.implicitContext = result;
     return result;
@@ -1662,14 +1662,15 @@ export class Interpreter {
     return this.mergeValues(left, right);
   }
 
-  private mergeValues(left: OrchidValue, right: OrchidValue): OrchidValue {
+  private async mergeValues(left: OrchidValue, right: OrchidValue): Promise<OrchidValue> {
     // Number + Number → arithmetic
     if (left.kind === 'number' && right.kind === 'number') {
       return orchidNumber(left.value + right.value);
     }
-    // String + String → concatenation
+    // String + String → semantic synthesis via LLM
     if (left.kind === 'string' && right.kind === 'string') {
-      return orchidString(left.value + '\n\n' + right.value);
+      const input = `Source A:\n${left.value}\n\nSource B:\n${right.value}`;
+      return this.provider.execute('Merge', input, {}, []);
     }
     // List + List → concatenation
     if (left.kind === 'list' && right.kind === 'list') {
@@ -1683,8 +1684,9 @@ export class Interpreter {
       }
       return orchidDict(merged);
     }
-    // Mixed → synthesize as string
-    return orchidString(valueToString(left) + '\n\n' + valueToString(right));
+    // Mixed → semantic synthesis via LLM
+    const input = `Source A:\n${valueToString(left)}\n\nSource B:\n${valueToString(right)}`;
+    return this.provider.execute('Merge', input, {}, []);
   }
 
   private async executeAlternative(node: AST.AlternativeExpression, env: Environment): Promise<OrchidValue> {
@@ -2046,7 +2048,7 @@ export class Interpreter {
         if (!isPrivate) {
           if (this.hasTag(tags, 'append') && this.implicitContext.kind !== 'null') {
             // <append>: merge with existing context
-            this.implicitContext = this.mergeValues(this.implicitContext, result);
+            this.implicitContext = await this.mergeValues(this.implicitContext, result);
           } else {
             this.implicitContext = result;
           }
