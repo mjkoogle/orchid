@@ -216,6 +216,41 @@ describe('Parser', () => {
       expect(expr.operator).toBe('>');
     });
 
+    it('should parse arithmetic multiplication', () => {
+      const ast = parse('result := a * b');
+      const assign = ast.body[0] as AST.Assignment;
+      const expr = assign.value as AST.ArithmeticExpression;
+      expect(expr.type).toBe('ArithmeticExpression');
+      expect(expr.operator).toBe('*');
+    });
+
+    it('should parse arithmetic division', () => {
+      const ast = parse('result := a / b');
+      const assign = ast.body[0] as AST.Assignment;
+      const expr = assign.value as AST.ArithmeticExpression;
+      expect(expr.type).toBe('ArithmeticExpression');
+      expect(expr.operator).toBe('/');
+    });
+
+    it('should parse arithmetic subtraction', () => {
+      const ast = parse('result := a - b');
+      const assign = ast.body[0] as AST.Assignment;
+      const expr = assign.value as AST.ArithmeticExpression;
+      expect(expr.type).toBe('ArithmeticExpression');
+      expect(expr.operator).toBe('-');
+    });
+
+    it('should parse chained arithmetic with correct left-to-right associativity', () => {
+      const ast = parse('result := a * b / c');
+      const assign = ast.body[0] as AST.Assignment;
+      const outer = assign.value as AST.ArithmeticExpression;
+      expect(outer.type).toBe('ArithmeticExpression');
+      expect(outer.operator).toBe('/');
+      const inner = outer.left as AST.ArithmeticExpression;
+      expect(inner.type).toBe('ArithmeticExpression');
+      expect(inner.operator).toBe('*');
+    });
+
     it('should parse in expression', () => {
       const ast = parse('"postgres" in available');
       const expr = ast.body[0] as AST.InExpression;

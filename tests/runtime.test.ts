@@ -138,6 +138,61 @@ describe('Runtime', () => {
     });
   });
 
+  describe('arithmetic operators', () => {
+    it('should multiply numbers', async () => {
+      const result = await run('x := 3 * 4');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(12);
+    });
+
+    it('should divide numbers', async () => {
+      const result = await run('x := 10 / 2');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(5);
+    });
+
+    it('should subtract numbers', async () => {
+      const result = await run('x := 10 - 3');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(7);
+    });
+
+    it('should concatenate strings with *', async () => {
+      const result = await run('a := "hello"\nb := " world"\nc := a * b');
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('hello world');
+    });
+
+    it('should remove literal substring with /', async () => {
+      const result = await run('a := "hello world"\nb := "world"\nc := a / b');
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('hello ');
+    });
+
+    it('should remove all occurrences with /', async () => {
+      const result = await run('a := "banana"\nb := "a"\nc := a / b');
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('bnn');
+    });
+
+    it('should return original string when / target not found', async () => {
+      const result = await run('a := "hello"\nb := "xyz"\nc := a / b');
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('hello');
+    });
+
+    it('should semantically subtract strings with - via provider', async () => {
+      const result = await run('a := "The quick brown fox"\nb := "quick brown"\nc := a - b');
+      expect(result.kind).toBe('string');
+    });
+
+    it('should handle division by zero', async () => {
+      const result = await run('x := 10 / 0');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(Infinity);
+    });
+  });
+
   describe('pipe operator', () => {
     it('should chain operations with >>', async () => {
       const result = await run('Search("topic") >> CoT("analyze")');

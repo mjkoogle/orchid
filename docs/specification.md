@@ -240,12 +240,50 @@ else:
 
 ## 4. Operators
 
+### 4.0 Operator Reference
+
+#### Composition Operators
+
 | Operator | Name        | Description                                          | Example                             |
 |----------|-------------|------------------------------------------------------|-------------------------------------|
 | `:=`     | Bind        | Assign operation output to a name                    | `x := Search("topic")`             |
+| `+=`     | Append      | Merge a value into an existing binding               | `report += Creative("new angle")`   |
 | `+`      | Merge       | Combine two contexts/outputs into one                | `full := research + analysis`       |
 | `\|`     | Alternative | Try left; on failure or low confidence, try right    | `result := Search(a) \| Search(b)` |
 | `>>`     | Pipe        | Pass left output as right input                      | `Search("topic") >> CoT >> ELI5`   |
+
+#### Arithmetic Operators
+
+| Operator | Name        | Description                                          | Example                             |
+|----------|-------------|------------------------------------------------------|-------------------------------------|
+| `*`      | Multiply    | Numeric multiplication; string concatenation         | `area := width * height`           |
+| `/`      | Divide      | Numeric division; literal string removal             | `clean := raw / "unwanted text"`   |
+| `-`      | Subtract    | Numeric subtraction; semantic string subtraction (LLM) | `trimmed := report - "methodology"` |
+
+#### Comparison Operators
+
+| Operator | Name                | Description                              | Example                       |
+|----------|---------------------|------------------------------------------|-------------------------------|
+| `==`     | Equal               | Test equality                            | `if status == "ready":`       |
+| `!=`     | Not Equal           | Test inequality                          | `if error != null:`           |
+| `>`      | Greater Than        | Numeric comparison                       | `if Confidence() > 0.8:`     |
+| `<`      | Less Than           | Numeric comparison                       | `if score < threshold:`      |
+| `>=`     | Greater or Equal    | Numeric comparison                       | `if count >= 10:`            |
+| `<=`     | Less or Equal       | Numeric comparison                       | `if risk <= 0.3:`            |
+
+#### Logical Operators
+
+| Operator | Name  | Description                                    | Example                              |
+|----------|-------|------------------------------------------------|--------------------------------------|
+| `and`    | And   | Short-circuit logical AND                      | `if ready and valid:`                |
+| `or`     | Or    | Short-circuit logical OR                       | `if cached or available:`            |
+| `not`    | Not   | Logical negation                               | `if not done:`                       |
+
+#### Containment Operator
+
+| Operator | Name  | Description                                    | Example                              |
+|----------|-------|------------------------------------------------|--------------------------------------|
+| `in`     | In    | Test membership in list, string, or dict       | `if "postgres" in available:`        |
 
 ### 4.1 Merge Semantics
 
@@ -264,6 +302,47 @@ The `|` operator provides fallback chains. Each alternative is tried left-to-rig
 ```orchid
 data := API:Fetch(url) | Cache:Load(key) | Search("$query")<best_effort>
 ```
+
+### 4.3 Arithmetic String Semantics
+
+The `*`, `/`, and `-` operators have dual behavior depending on operand types.
+
+**Multiply (`*`):** For numbers, standard multiplication. For strings, direct concatenation (no separator). Use `*` when you want literal joining; use `+` when you want the agent to synthesize.
+
+```orchid
+greeting := "Hello, " * name    # "Hello, Alice"
+area := width * height           # 50
+```
+
+**Divide (`/`):** For numbers, standard division. For strings, literal removal — all occurrences of the right operand are removed from the left.
+
+```orchid
+clean := "the quick the fox" / "the "   # "quick fox"
+half := total / 2                        # 50.0
+```
+
+**Subtract (`-`):** For numbers, standard subtraction. For strings, semantic subtraction — the LLM rewrites the left operand with the concepts/content described by the right operand removed, preserving coherence and flow.
+
+```orchid
+accessible := technical_report - "jargon and acronyms"
+concise := draft - "redundant examples"
+count := total - used
+```
+
+### 4.4 Operator Precedence
+
+From lowest to highest precedence:
+
+1. `>>` (pipe)
+2. `|` (alternative)
+3. `or` (logical or)
+4. `and` (logical and)
+5. `not` (logical not)
+6. `==`, `!=`, `>`, `<`, `>=`, `<=` (comparison)
+7. `in` (containment)
+8. `+` (merge)
+9. `*`, `/`, `-` (arithmetic)
+10. Unary `-` (negation)
 
 ---
 
@@ -1210,10 +1289,25 @@ statement      ::= assignment | operation | control | atomic_block
                   | emit_stmt | on_stmt | comment
 
 assignment     ::= (IDENTIFIER | destructure) ':=' expression
+                 | IDENTIFIER '+=' expression
 destructure    ::= '[' IDENTIFIER (',' IDENTIFIER)* ']'
 
-expression     ::= operation | IDENTIFIER | literal | expression operator expression
+expression     ::= pipe_expr
+pipe_expr      ::= alt_expr ('>>' alt_expr)*
+alt_expr       ::= or_expr ('|' or_expr)*
+or_expr        ::= and_expr ('or' and_expr)*
+and_expr       ::= not_expr ('and' not_expr)*
+not_expr       ::= 'not' not_expr | cmp_expr
+cmp_expr       ::= in_expr (cmp_op in_expr)?
+cmp_op         ::= '==' | '!=' | '>' | '<' | '>=' | '<='
+in_expr        ::= merge_expr ('in' merge_expr)?
+merge_expr     ::= arith_expr ('+' arith_expr)*
+arith_expr     ::= unary_expr (('*' | '/' | '-') unary_expr)*
+unary_expr     ::= '-' unary_expr | postfix_expr
+postfix_expr   ::= primary ('.' IDENTIFIER | '(' args? ')' | '[' expression ']')*
+primary        ::= operation | IDENTIFIER | literal | '(' expression ')'
                  | listen_expr | stream_expr
+
 operation      ::= IDENTIFIER '(' args? ')' tags?
                |   IDENTIFIER tags?
                |   namespace ':' IDENTIFIER '(' args? ')' tags?
@@ -1223,8 +1317,6 @@ arg            ::= expression | IDENTIFIER '=' expression
 
 tags           ::= '<' tag (',' tag)* '>'
 tag            ::= IDENTIFIER ('=' value)?
-
-operator       ::= '+' | '|' | '>>'
 
 atomic_block   ::= '###' NEWLINE statement* '###'
 

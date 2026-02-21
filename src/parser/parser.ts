@@ -684,8 +684,8 @@ export class Parser {
   private parseAddition(): AST.Node {
     let left = this.parseUnary();
 
-    while (this.check(TokenType.STAR) || this.check(TokenType.MINUS)) {
-      const op = this.advance().value as '*' | '-';
+    while (this.check(TokenType.STAR) || this.check(TokenType.MINUS) || this.check(TokenType.SLASH)) {
+      const op = this.advance().value as '*' | '-' | '/';
       const right = this.parseUnary();
       left = {
         type: 'ArithmeticExpression',

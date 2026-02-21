@@ -23,6 +23,7 @@ export enum TokenType {
   EQUALS = 'EQUALS',           // =
   STAR = 'STAR',               // *
   MINUS = 'MINUS',             // -
+  SLASH = 'SLASH',             // /
 
   // Comparison
   GT = 'GT',                   // >

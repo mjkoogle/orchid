@@ -272,7 +272,7 @@ export interface UnaryExpression extends BaseNode {
 
 export interface ArithmeticExpression extends BaseNode {
   type: 'ArithmeticExpression';
-  operator: '+' | '-' | '*';
+  operator: '+' | '-' | '*' | '/';
   left: Node;
   right: Node;
 }

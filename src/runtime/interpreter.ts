@@ -1749,6 +1749,7 @@ export class Interpreter {
     if (left.kind === 'number' && right.kind === 'number') {
       switch (node.operator) {
         case '*': return orchidNumber(left.value * right.value);
+        case '/': return orchidNumber(left.value / right.value);
         case '-': return orchidNumber(left.value - right.value);
         case '+': return orchidNumber(left.value + right.value);
       }
@@ -1757,6 +1758,20 @@ export class Interpreter {
     // String concatenation for *
     if (node.operator === '*' && left.kind === 'string' && right.kind === 'string') {
       return orchidString(valueToString(left) + valueToString(right));
+    }
+
+    // String literal removal for /
+    if (node.operator === '/' && left.kind === 'string' && right.kind === 'string') {
+      const leftStr = valueToString(left);
+      const rightStr = valueToString(right);
+      return orchidString(leftStr.split(rightStr).join(''));
+    }
+
+    // String semantic subtraction for - (delegates to LLM)
+    if (node.operator === '-' && left.kind === 'string' && right.kind === 'string') {
+      const input = `Original text:\n${valueToString(left)}\n\nContent to remove:\n${valueToString(right)}`;
+      const result = await this.provider.execute('Subtract', input, {}, []);
+      return result;
     }
 
     return orchidNull();

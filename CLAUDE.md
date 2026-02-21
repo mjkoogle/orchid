@@ -150,6 +150,14 @@ node dist/cli.js --parse examples/deep_research.orch
 **Generative:** `Creative`, `Brainstorm`, `Abstract`, `Ground`, `Reframe`
 **Meta:** `Reflect`, `Explain`, `Summarize`, `Confidence`, `Trace`, `Cost`
 
+### Operators
+
+**Composition:** `:=` (bind), `+=` (append), `+` (merge), `|` (alternative), `>>` (pipe)
+**Arithmetic:** `*` (multiply / string concat), `/` (divide / literal string removal), `-` (subtract / semantic string subtraction via LLM)
+**Comparison:** `==`, `!=`, `>`, `<`, `>=`, `<=`
+**Logical:** `and`, `or`, `not`
+**Containment:** `in`
+
 ### Control Flow
 
 ```orchid

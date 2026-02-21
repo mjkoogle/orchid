@@ -423,6 +423,10 @@ export class Lexer {
         this.advance();
         this.addTokenAt(TokenType.MINUS, '-', this.line, startCol);
         break;
+      case '/':
+        this.advance();
+        this.addTokenAt(TokenType.SLASH, '/', this.line, startCol);
+        break;
       default:
         throw this.error(`Unexpected character '${ch}'`);
     }

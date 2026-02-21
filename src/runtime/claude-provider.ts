@@ -168,6 +168,14 @@ Make the theoretical practical. Provide real-world instances and applications.`,
   Reframe: `Approach the input from a fundamentally different angle.
 Challenge the framing itself. What happens if we look at this problem completely differently?`,
 
+  // ── Operators ──
+  Subtract: `You are performing semantic subtraction. Given an original text and content to remove,
+produce a new version of the original with the specified content, themes, or concepts removed.
+Preserve the remaining content's coherence and flow. Do not simply delete sentences —
+rewrite the text so it reads naturally without the subtracted material.
+If the content to remove is a concept or theme, remove all references and implications of it.
+Return ONLY the resulting text, no explanation.`,
+
   // ── Meta ──
   Reflect: `Perform a meta-cognitive review. Analyze the reasoning approach itself:
 - What assumptions are being made?
