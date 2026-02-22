@@ -58,6 +58,12 @@ export interface OrchidProvider {
     args: Record<string, OrchidValue>,
     tags: TagInfo[]
   ): Promise<OrchidValue>;
+
+  /**
+   * Return total tokens consumed across all API calls this session.
+   * Optional — providers that don't track tokens can omit this.
+   */
+  getTokensUsed?(): number;
 }
 
 /**

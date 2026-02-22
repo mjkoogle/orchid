@@ -354,9 +354,18 @@ export class Parser {
       this.expect(TokenType.LBRACKET);
       const actions: string[] = [];
       if (!this.check(TokenType.RBRACKET)) {
-        actions.push(this.expect(TokenType.IDENTIFIER).value);
-        while (this.match(TokenType.COMMA)) {
+        // Accept IDENTIFIER or STAR (*) as action names
+        if (this.check(TokenType.STAR)) {
+          actions.push(this.advance().value);
+        } else {
           actions.push(this.expect(TokenType.IDENTIFIER).value);
+        }
+        while (this.match(TokenType.COMMA)) {
+          if (this.check(TokenType.STAR)) {
+            actions.push(this.advance().value);
+          } else {
+            actions.push(this.expect(TokenType.IDENTIFIER).value);
+          }
         }
       }
       this.expect(TokenType.RBRACKET);
@@ -684,8 +693,8 @@ export class Parser {
   private parseAddition(): AST.Node {
     let left = this.parseUnary();
 
-    while (this.check(TokenType.STAR) || this.check(TokenType.MINUS)) {
-      const op = this.advance().value as '*' | '-';
+    while (this.check(TokenType.STAR) || this.check(TokenType.MINUS) || this.check(TokenType.SLASH)) {
+      const op = this.advance().value as '*' | '-' | '/';
       const right = this.parseUnary();
       left = {
         type: 'ArithmeticExpression',
@@ -728,6 +737,24 @@ export class Parser {
       } else if (this.check(TokenType.LPAREN) && node.type === 'MemberExpression') {
         // Namespaced call like ns:Func() - already handled, or member.method()
         break;
+      } else if (this.check(TokenType.LBRACKET)) {
+        // Index access: expr[index]
+        // Need to distinguish from bracket-count syntax (Operation[3])
+        // Only treat as index if the node is NOT an identifier (operations use bracket-count)
+        // or if it's an identifier that isn't a macro name (lowercase identifiers)
+        if (node.type === 'Identifier' && /^[A-Z]/.test(node.name)) {
+          // Could be Operation[n](...) bracket-count syntax, don't consume here
+          break;
+        }
+        this.advance(); // consume [
+        const index = this.parseExpression();
+        this.expect(TokenType.RBRACKET);
+        node = {
+          type: 'IndexExpression' as const,
+          object: node,
+          index,
+          position: node.position,
+        };
       } else {
         break;
       }
@@ -921,8 +948,8 @@ export class Parser {
       };
     }
 
-    // Check for bracket notation: Identifier[n]
-    if (this.check(TokenType.LBRACKET)) {
+    // Check for bracket-count notation: Operation[n] (only for uppercase operation names)
+    if (this.check(TokenType.LBRACKET) && /^[A-Z]/.test(name)) {
       const savedPos = this.pos;
       this.advance();
       if (this.check(TokenType.NUMBER)) {

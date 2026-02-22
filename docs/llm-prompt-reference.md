@@ -16,6 +16,7 @@ assignment     ::= (IDENTIFIER | destructure) ':=' expression
 destructure    ::= '[' IDENTIFIER (',' IDENTIFIER)* ']'
 
 expression     ::= operation | IDENTIFIER | literal | expression operator expression
+                 | expression '[' expression ']'
 operation      ::= IDENTIFIER '(' args? ')' tags?
                |   IDENTIFIER tags?
                |   IDENTIFIER '[' INTEGER ']' '(' args? ')' tags?
@@ -24,9 +25,9 @@ args           ::= arg (',' arg)*
 arg            ::= expression | IDENTIFIER '=' expression
 
 tags           ::= '<' tag (',' tag)* '>'
-tag            ::= IDENTIFIER ('=' value)?
+tag            ::= IDENTIFIER ('=' value)? | '$' IDENTIFIER
 
-operator       ::= '+' | '|' | '>>'
+operator       ::= '+' | '-' | '*' | '/' | '|' | '>>' | '==' | '!=' | '>' | '<' | '>=' | '<=' | 'and' | 'or' | 'not' | 'in'
 
 atomic_block   ::= '###' NEWLINE statement* '###'
 
@@ -67,17 +68,25 @@ section        ::= '##' TEXT NEWLINE
 - **Indentation** is meaningful (Python-style, 4 spaces)
 - **String interpolation** with `$`: `"Hello $name"` or `"Hello ${name}"`
 - **Implicit context** `_`: the result of the most recent operation. Operations called with no arguments receive `_` automatically.
+- **Index access**: `list[0]`, `dict["key"]`, `string[0]` (negative indices supported: `list[-1]`)
 - **Comments**: `#` for single-line, `##` for section headings
 - **Files** must start with `@orchid 0.1`
 
 ## Operators
 
-| Op   | Name        | Meaning                                               |
-|------|-------------|-------------------------------------------------------|
-| `:=` | Bind        | Assign output to a name                               |
-| `+`  | Merge       | Combine two contexts (agent synthesizes, not concats)  |
-| `\|` | Alternative | Try left; on failure, try right                       |
-| `>>` | Pipe        | Pass left output as right input                       |
+| Op    | Name        | Meaning                                                |
+|-------|-------------|--------------------------------------------------------|
+| `:=`  | Assign      | Assign output to a name                                |
+| `+=`  | Append      | Merge a value into an existing variable                |
+| `+`   | Add/Merge   | Numeric add; semantic synthesis for strings (LLM)      |
+| `-`   | Subtract    | Numeric subtract; semantic subtraction for strings     |
+| `*`   | Multiply    | Numeric multiply; string concatenation                 |
+| `/`   | Divide      | Numeric divide; literal string removal                 |
+| `\|`  | Alternative | Try left; on failure, try right                        |
+| `>>`  | Pipe        | Pass left output as right input                        |
+| `==` `!=` `>` `<` `>=` `<=` | Comparison | Compare values              |
+| `and` `or` `not` | Logical | Boolean logic                              |
+| `in`  | Containment | Check membership                                       |
 
 ## Built-in Reasoning Macros
 
@@ -126,16 +135,21 @@ All macros take an optional string/context argument. Called without arguments, t
 - `Reframe(problem)` - Approach from a different angle.
 
 **Meta** (introspect):
-- `Confidence(scope?)` - Self-assess certainty (0.0-1.0).
+- `Confidence(scope?)` - Self-assess certainty (0.0-1.0). Hybrid: 50% provider + 50% runtime signals.
+- `Benchmark(output, metric)` - Evaluate output quality (returns 0.0-1.0).
+- `Validate(output, criteria)` - Check against acceptance criteria (returns boolean).
 - `Explain(step)` - Justify reasoning.
 - `Reflect(process)` - Meta-cognitive review of own approach.
+- `Trace(depth?)` - Emit execution history.
+- `Cost()` - Token/compute cost so far.
+- `Elapsed()` - Wall-clock milliseconds since execution began.
 - `Checkpoint(label?)` / `Rollback(target)` - Save/restore state.
 
 **Utility:**
 - `Search(query)` - Search for information.
 - `Summarize(content)` - Condense.
 - `Log(message)` / `Error(message)` - Logging.
-- `Save(content)` - Persist output.
+- `Save(content, path?)` - Persist output to file (or stdout if no path).
 
 ## Tags (Behavior Modifiers)
 
@@ -144,11 +158,16 @@ Appended to any operation with angle brackets:
 ```orchid
 CoT("analysis")<deep>                  # exhaustive analysis
 Search("topic")<retry=3, timeout=30s>  # retry on failure
+CoT("query")<retry=3, backoff>         # exponential delay between retries
 Validate(x)<strict>                    # zero tolerance for ambiguity
 CoT("scratch work")<private>           # suppress from output
+mode := "deep"
+CoT("analysis")<$mode>                 # dynamic tag from variable
 ```
 
-Common tags: `<deep>`, `<quick>`, `<urgent>`, `<best_effort>`, `<tentative>`, `<strict>`, `<retry=N>`, `<timeout=Ns>`, `<fallback=X>`, `<private>`, `<verbose>`, `<cite>`, `<append>`, `<isolated>`
+Common tags: `<deep>`, `<quick>`, `<urgent>`, `<best_effort>`, `<tentative>`, `<strict>`, `<retry=N>`, `<backoff>`, `<timeout=Ns>`, `<fallback=X>`, `<cached>`, `<pure>`, `<private>`, `<verbose>`, `<cite>`, `<append>`, `<isolated>`, `<frozen>`
+
+Dynamic tags: Use `<$var>` to resolve a tag name from a variable at runtime.
 
 ## Parallel Execution (Fork)
 
@@ -234,7 +253,7 @@ else:
 @orchid 0.1
 @name "Threat Model"
 
-macro ThreatModel(system)<idempotent>:
+macro ThreatModel(system)<pure>:
     surface := Decompose("attack surface of $system")
     threats := fork:
         spoofing: RedTeam("spoofing attacks on $surface")

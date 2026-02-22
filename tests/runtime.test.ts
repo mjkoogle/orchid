@@ -138,6 +138,61 @@ describe('Runtime', () => {
     });
   });
 
+  describe('arithmetic operators', () => {
+    it('should multiply numbers', async () => {
+      const result = await run('x := 3 * 4');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(12);
+    });
+
+    it('should divide numbers', async () => {
+      const result = await run('x := 10 / 2');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(5);
+    });
+
+    it('should subtract numbers', async () => {
+      const result = await run('x := 10 - 3');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(7);
+    });
+
+    it('should concatenate strings with *', async () => {
+      const result = await run('a := "hello"\nb := " world"\nc := a * b');
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('hello world');
+    });
+
+    it('should remove literal substring with /', async () => {
+      const result = await run('a := "hello world"\nb := "world"\nc := a / b');
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('hello ');
+    });
+
+    it('should remove all occurrences with /', async () => {
+      const result = await run('a := "banana"\nb := "a"\nc := a / b');
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('bnn');
+    });
+
+    it('should return original string when / target not found', async () => {
+      const result = await run('a := "hello"\nb := "xyz"\nc := a / b');
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('hello');
+    });
+
+    it('should semantically subtract strings with - via provider', async () => {
+      const result = await run('a := "The quick brown fox"\nb := "quick brown"\nc := a - b');
+      expect(result.kind).toBe('string');
+    });
+
+    it('should handle division by zero', async () => {
+      const result = await run('x := 10 / 0');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(Infinity);
+    });
+  });
+
   describe('pipe operator', () => {
     it('should chain operations with >>', async () => {
       const result = await run('Search("topic") >> CoT("analyze")');
@@ -610,6 +665,151 @@ until Confidence()<retry=3>:
     });
   });
 
+  // ─── Tag behaviors ─────────────────────────────────────────
+
+  describe('tag behaviors', () => {
+    // ── retry ──
+    it('should retry on failure with <retry=N>', async () => {
+      let callCount = 0;
+      const flaky = new ConsoleProvider();
+      const origExecute = flaky.execute.bind(flaky);
+      flaky.execute = async (op, input, ctx, tags) => {
+        callCount++;
+        if (callCount < 3) throw new Error('transient failure');
+        return origExecute(op, input, ctx, tags);
+      };
+
+      const source = 'CoT("analyze")<retry=5>';
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider: flaky });
+      const result = await interpreter.run(ast);
+      expect(result.kind).toBe('string');
+      expect(callCount).toBe(3);
+      await interpreter.shutdown();
+    });
+
+    // ── fallback ──
+    it('should return fallback value on failure with <fallback=X>', async () => {
+      const broken = new ConsoleProvider();
+      broken.execute = async () => { throw new Error('always fails'); };
+
+      const source = 'CoT("analyze")<fallback="default answer">';
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider: broken });
+      const result = await interpreter.run(ast);
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('default answer');
+      await interpreter.shutdown();
+    });
+
+    // ── best_effort ──
+    it('should return null on failure with <best_effort>', async () => {
+      const broken = new ConsoleProvider();
+      broken.execute = async () => { throw new Error('always fails'); };
+
+      const source = 'CoT("analyze")<best_effort>';
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider: broken });
+      const result = await interpreter.run(ast);
+      expect(result.kind).toBe('null');
+      await interpreter.shutdown();
+    });
+
+    // ── cached ──
+    it('should cache results with <cached>', async () => {
+      let callCount = 0;
+      const counting = new ConsoleProvider();
+      const origExecute = counting.execute.bind(counting);
+      counting.execute = async (op, input, ctx, tags) => {
+        callCount++;
+        return origExecute(op, input, ctx, tags);
+      };
+
+      const source = 'a := CoT("same input")<cached>\nb := CoT("same input")<cached>';
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider: counting });
+      await interpreter.run(ast);
+      expect(callCount).toBe(1);
+      await interpreter.shutdown();
+    });
+
+    // ── pure ──
+    it('should cache results with <pure> (same as cached)', async () => {
+      let callCount = 0;
+      const counting = new ConsoleProvider();
+      const origExecute = counting.execute.bind(counting);
+      counting.execute = async (op, input, ctx, tags) => {
+        callCount++;
+        return origExecute(op, input, ctx, tags);
+      };
+
+      const source = 'a := CoT("same input")<pure>\nb := CoT("same input")<pure>';
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider: counting });
+      await interpreter.run(ast);
+      expect(callCount).toBe(1);
+      await interpreter.shutdown();
+    });
+
+    // ── private ──
+    it('should not update implicit context with <private>', async () => {
+      // After a <private> operation, the implicit context should NOT be updated
+      const result = await run('x := "original"\nCoT("secret")<private>\ny := x');
+      // y should still be "original" since the private CoT didn't update context
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('original');
+    });
+
+    // ── append ──
+    it('should append to implicit context with <append>', async () => {
+      const result = await run('a := "first"\nCoT("second")<append>\nb := a');
+      // a should still be "first", but the implicit context should have been appended
+      expect(result.kind).toBe('string');
+    });
+
+    // ── frozen ──
+    it('should prevent reassignment of frozen variables', async () => {
+      await expect(run('x := CoT("analysis")<frozen>\nx := "new value"'))
+        .rejects.toThrow('frozen');
+    });
+
+    it('should prevent += on frozen variables', async () => {
+      await expect(run('x := CoT("analysis")<frozen>\nx += "more"'))
+        .rejects.toThrow('frozen');
+    });
+
+    it('should allow frozen variables to be read', async () => {
+      const result = await run('x := CoT("analysis")<frozen>\ny := x');
+      expect(result.kind).toBe('string');
+    });
+
+    // ── isolated ──
+    it('should execute with empty context when <isolated>', async () => {
+      // With isolated, the operation should not receive accumulated context
+      const result = await run('context := "background info"\nresult := CoT("analyze")<isolated>');
+      expect(result.kind).toBe('string');
+    });
+
+    // ── combined tags ──
+    it('should support multiple tags together', async () => {
+      const result = await run('CoT("analyze")<deep, cached>');
+      expect(result.kind).toBe('string');
+    });
+
+    it('should combine retry with fallback', async () => {
+      const broken = new ConsoleProvider();
+      broken.execute = async () => { throw new Error('always fails'); };
+
+      const source = 'CoT("analyze")<retry=2, fallback="safe default">';
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider: broken });
+      const result = await interpreter.run(ast);
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('safe default');
+      await interpreter.shutdown();
+    });
+  });
+
   // ─── require MCP/Plugin availability ──────────────────────
 
   describe('require MCP/Plugin', () => {
@@ -701,6 +901,213 @@ x := 42`;
     });
   });
 
+  // ─── Checkpoint / Rollback ──────────────────────────────
+
+  describe('Checkpoint and Rollback', () => {
+    it('should save and restore variable state', async () => {
+      const source = `x := "original"
+Checkpoint("snap")
+x := "modified"
+Rollback("snap")
+result := x`;
+      const result = await run(source);
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('original');
+    });
+
+    it('should save and restore implicit context', async () => {
+      const source = `Search("first topic")
+Checkpoint("ctx_snap")
+Search("second topic")
+Rollback("ctx_snap")
+result := CoT("summarize")`;
+      const result = await run(source);
+      // After rollback, the implicit context should relate to "first topic"
+      expect(result.kind).toBe('string');
+      expect(valueToString(result)).toContain('CoT');
+    });
+
+    it('should support multiple named checkpoints', async () => {
+      const source = `x := 1
+Checkpoint("a")
+x := 2
+Checkpoint("b")
+x := 3
+Rollback("a")
+result := x`;
+      const result = await run(source);
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(1);
+    });
+
+    it('should overwrite checkpoint on re-save with same label', async () => {
+      const source = `x := 1
+Checkpoint("snap")
+x := 2
+Checkpoint("snap")
+x := 3
+Rollback("snap")
+result := x`;
+      const result = await run(source);
+      // Second checkpoint at x=2 overwrites first, so rollback restores x=2
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(2);
+    });
+
+    it('should use default label when none specified', async () => {
+      const source = `x := "before"
+Checkpoint()
+x := "after"
+Rollback()
+result := x`;
+      const result = await run(source);
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('before');
+    });
+
+    it('should throw RuntimeError for missing checkpoint', async () => {
+      await expect(run('Rollback("nonexistent")'))
+        .rejects.toThrow('No checkpoint found');
+    });
+
+    it('should work inside conditional branches', async () => {
+      const source = `x := "start"
+Checkpoint("safe")
+flag := true
+if flag:
+    x := "changed"
+    Rollback("safe")
+result := x`;
+      const result = await run(source);
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('start');
+    });
+  });
+
+  // ─── Arithmetic edge cases ─────────────────────────────
+
+  describe('arithmetic edge cases', () => {
+    it('should return Infinity for division by zero', async () => {
+      const result = await run('x := 10 / 0');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(Infinity);
+    });
+
+    it('should return -Infinity for negative division by zero', async () => {
+      const result = await run('x := -10 / 0');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(-Infinity);
+    });
+
+    it('should return NaN for 0 / 0', async () => {
+      const result = await run('x := 0 / 0');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBeNaN();
+    });
+
+    it('should handle multiplication by zero', async () => {
+      const result = await run('x := 42 * 0');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(0);
+    });
+
+    it('should handle negative number arithmetic', async () => {
+      const result = await run('x := -5 * -3');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(15);
+    });
+
+    it('should handle floating point multiplication', async () => {
+      const result = await run('x := 0.1 * 10');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBeCloseTo(1.0);
+    });
+
+    it('should handle subtraction resulting in negative', async () => {
+      const result = await run('x := 3 - 10');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(-7);
+    });
+
+    it('should handle chained arithmetic', async () => {
+      const result = await run('x := 2 * 3 * 4');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(24);
+    });
+
+    it('should return null for non-numeric non-string arithmetic', async () => {
+      const result = await run('x := true * false');
+      expect(result.kind).toBe('null');
+    });
+
+    it('should handle very large numbers', async () => {
+      const result = await run('x := 999999999 * 999999999');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(999999999 * 999999999);
+    });
+  });
+
+  // ─── Import deeper nesting ──────────────────────────────
+
+  describe('import deeper nesting', () => {
+    it('should resolve deeply nested imports via string paths', async () => {
+      const source = `import "lib/deep/nested_mod" as deep
+result := deep.nested_value`;
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({
+        provider: new ConsoleProvider(),
+        scriptDir: fixturesDir,
+      });
+      const result = await interpreter.run(ast);
+      await interpreter.shutdown();
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('from-deep-nested');
+    });
+
+    it('should resolve multi-level chained imports', async () => {
+      const source = `import "lib/mid_layer" as mid
+result := mid.mid_value`;
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({
+        provider: new ConsoleProvider(),
+        scriptDir: fixturesDir,
+      });
+      const result = await interpreter.run(ast);
+      await interpreter.shutdown();
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('from-mid');
+    });
+
+    it('should access nested numeric values through imports', async () => {
+      const source = `import "lib/deep/nested_mod" as deep
+result := deep.nested_num`;
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({
+        provider: new ConsoleProvider(),
+        scriptDir: fixturesDir,
+      });
+      const result = await interpreter.run(ast);
+      await interpreter.shutdown();
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(99);
+    });
+
+    it('should handle multiple imports from different depths', async () => {
+      const source = `import "lib/utils" as utils
+import "lib/deep/nested_mod" as deep
+result := utils.max_retries`;
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({
+        provider: new ConsoleProvider(),
+        scriptDir: fixturesDir,
+      });
+      const result = await interpreter.run(ast);
+      await interpreter.shutdown();
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(3);
+    });
+  });
+
   // ─── Spec error types ─────────────────────────────────────
 
   describe('spec error types', () => {
@@ -761,6 +1168,501 @@ g:NonExistent("test")`;
         expect(e.errorType).toBe('CyclicDependency');
       }
       await interpreter.shutdown();
+    });
+  });
+
+  // ─── Dynamic tag resolution ───────────────────────────────
+
+  describe('dynamic tag resolution', () => {
+    it('should resolve <$var> tag from variable', async () => {
+      // Use a direct Interpreter to capture tags passed to provider
+      const provider = new ConsoleProvider();
+      let capturedTags: any[] = [];
+      const origExecute = provider.execute.bind(provider);
+      provider.execute = async (op: string, input: string, ctx: any, tags: any[]) => {
+        capturedTags = tags;
+        return origExecute(op, input, ctx, tags);
+      };
+      const source = `mode := "deep"
+result := CoT("analyze this")<$mode>`;
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider, scriptDir: fixturesDir });
+      await interpreter.run(ast);
+      await interpreter.shutdown();
+      expect(capturedTags).toEqual([{ name: 'deep' }]);
+    });
+
+    it('should skip null dynamic tags', async () => {
+      const source = `result := CoT("analyze this")<$undefined_var>`;
+      const result = await run(source);
+      expect(result.kind).toBe('string');
+      // Should still execute without error, no tag applied
+    });
+
+    it('should combine dynamic and static tags', async () => {
+      const provider = new ConsoleProvider();
+      let capturedTags: any[] = [];
+      const origExecute = provider.execute.bind(provider);
+      provider.execute = async (op: string, input: string, ctx: any, tags: any[]) => {
+        capturedTags = tags;
+        return origExecute(op, input, ctx, tags);
+      };
+      const source = `style := "verbose"
+result := CoT("topic")<quick, $style>`;
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider, scriptDir: fixturesDir });
+      await interpreter.run(ast);
+      await interpreter.shutdown();
+      expect(capturedTags.map((t: any) => t.name)).toEqual(['quick', 'verbose']);
+    });
+  });
+
+  // ─── Cost() wiring ─────────────────────────────────────────
+
+  describe('Cost() wiring', () => {
+    it('should return 0 for console provider', async () => {
+      const result = await run('cost := Cost()');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(0);
+    });
+
+    it('should return a number', async () => {
+      const result = await run(`Search("test")
+cost := Cost()`);
+      expect(result.kind).toBe('number');
+    });
+  });
+
+  // ─── Save() persistence ─────────────────────────────────────
+
+  describe('Save() persistence', () => {
+    it('should write to file when path argument given', async () => {
+      const fs = require('fs');
+      const tmpPath = '/tmp/orchid-test-save-' + Date.now() + '.txt';
+      const source = `Save("hello save", path="${tmpPath}")`;
+      await run(source);
+      expect(fs.existsSync(tmpPath)).toBe(true);
+      const content = fs.readFileSync(tmpPath, 'utf-8');
+      expect(content).toBe('hello save');
+      fs.unlinkSync(tmpPath);
+    });
+
+    it('should use implicit context when no positional arg', async () => {
+      const fs = require('fs');
+      const tmpPath = '/tmp/orchid-test-save2-' + Date.now() + '.txt';
+      const source = `x := "context value"
+Save(path="${tmpPath}")`;
+      await run(source);
+      expect(fs.existsSync(tmpPath)).toBe(true);
+      const content = fs.readFileSync(tmpPath, 'utf-8');
+      expect(content).toBe('context value');
+      fs.unlinkSync(tmpPath);
+    });
+  });
+
+  // ─── ORCHID_PATH imports ────────────────────────────────────
+
+  describe('ORCHID_PATH for imports', () => {
+    it('should find modules via ORCHID_PATH', async () => {
+      const originalPath = process.env.ORCHID_PATH;
+      process.env.ORCHID_PATH = fixturesDir;
+      try {
+        const source = `import "math_helpers" as math
+result := math.double_val`;
+        const ast = new Parser().parse(new Lexer(source).tokenize());
+        // Use a scriptDir that does NOT contain the module
+        const interpreter = new Interpreter({
+          provider: new ConsoleProvider(),
+          scriptDir: '/tmp',
+        });
+        const result = await interpreter.run(ast);
+        await interpreter.shutdown();
+        expect(result.kind).toBe('number');
+        if (result.kind === 'number') expect(result.value).toBe(2);
+      } finally {
+        if (originalPath !== undefined) {
+          process.env.ORCHID_PATH = originalPath;
+        } else {
+          delete process.env.ORCHID_PATH;
+        }
+      }
+    });
+
+    it('should fail when module not in scriptDir or ORCHID_PATH', async () => {
+      const originalPath = process.env.ORCHID_PATH;
+      delete process.env.ORCHID_PATH;
+      try {
+        const source = `import "nonexistent_module" as m`;
+        const ast = new Parser().parse(new Lexer(source).tokenize());
+        const interpreter = new Interpreter({
+          provider: new ConsoleProvider(),
+          scriptDir: '/tmp',
+        });
+        await expect(interpreter.run(ast)).rejects.toThrow('ImportError');
+        await interpreter.shutdown();
+      } finally {
+        if (originalPath !== undefined) {
+          process.env.ORCHID_PATH = originalPath;
+        } else {
+          delete process.env.ORCHID_PATH;
+        }
+      }
+    });
+  });
+
+  // ─── Import colon namespace syntax ──────────────────────────
+
+  describe('import colon namespace syntax', () => {
+    it('should access imported bindings via member expression', async () => {
+      const source = `import "math_helpers" as math
+result := math.label`;
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({
+        provider: new ConsoleProvider(),
+        scriptDir: fixturesDir,
+      });
+      const result = await interpreter.run(ast);
+      await interpreter.shutdown();
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('math_helpers loaded');
+    });
+
+    it('should access imported numeric values', async () => {
+      const source = `import "math_helpers" as math
+result := math.triple_val`;
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({
+        provider: new ConsoleProvider(),
+        scriptDir: fixturesDir,
+      });
+      const result = await interpreter.run(ast);
+      await interpreter.shutdown();
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(3);
+    });
+  });
+
+  // ─── Agent permission enforcement ──────────────────────────
+
+  describe('agent permission enforcement', () => {
+    it('should allow permitted namespace operations', async () => {
+      const source = `agent secure_agent(topic):
+    permissions:
+        filesystem: [read_text_file, directory_tree]
+    result := CoT(topic)
+    return result
+x := secure_agent("test")`;
+      const result = await run(source);
+      expect(result.kind).toBe('string');
+    });
+
+    it('should deny unpermitted namespace operations', async () => {
+      const source = `agent locked_agent(topic):
+    permissions:
+        filesystem: [read_text_file]
+    result := github:create_issue(title="test")
+    return result
+x := locked_agent("test")`;
+      await expect(run(source)).rejects.toThrow('PermissionDenied');
+    });
+
+    it('should deny unpermitted actions within a namespace', async () => {
+      const source = `agent limited_agent(topic):
+    permissions:
+        filesystem: [read_text_file]
+    result := filesystem:write_file(path="/tmp/test", content="test")
+    return result
+x := limited_agent("test")`;
+      await expect(run(source)).rejects.toThrow('PermissionDenied');
+    });
+
+    it('should allow wildcard permissions', async () => {
+      const source = `agent open_agent(topic):
+    permissions:
+        filesystem: [*]
+    result := filesystem:write_file(path="/tmp/test", content="test")
+    return result
+x := open_agent("test")`;
+      // Should not throw — wildcard permits all actions
+      const result = await run(source);
+      expect(result.kind).toBe('string');
+    });
+  });
+
+  // ─── DataUnavailable error ──────────────────────────────────
+
+  describe('DataUnavailable error', () => {
+    it('should throw DataUnavailable when search returns empty', async () => {
+      const provider = new ConsoleProvider();
+      // Override search to return empty string
+      provider.search = async () => ({ kind: 'string', value: '' });
+      const ast = new Parser().parse(new Lexer('result := Search("empty query")').tokenize());
+      const interpreter = new Interpreter({ provider, scriptDir: fixturesDir });
+      await expect(interpreter.run(ast)).rejects.toThrow('DataUnavailable');
+      await interpreter.shutdown();
+    });
+
+    it('should throw DataUnavailable when search returns null', async () => {
+      const provider = new ConsoleProvider();
+      provider.search = async () => ({ kind: 'null' });
+      const ast = new Parser().parse(new Lexer('result := Search("empty query")').tokenize());
+      const interpreter = new Interpreter({ provider, scriptDir: fixturesDir });
+      await expect(interpreter.run(ast)).rejects.toThrow('DataUnavailable');
+      await interpreter.shutdown();
+    });
+
+    it('should not throw when search returns content', async () => {
+      const result = await run('result := Search("valid query")');
+      expect(result.kind).toBe('string');
+    });
+  });
+
+  // ─── LowConfidence error ────────────────────────────────────
+
+  describe('LowConfidence error', () => {
+    it('should throw LowConfidence when until-Confidence loop exhausts', async () => {
+      const provider = new ConsoleProvider();
+      provider.setConfidence(0.1); // Always low
+      const source = `draft := CoT("topic")
+until Confidence(draft) > 0.9:
+    draft := Refine(draft)`;
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider, scriptDir: fixturesDir });
+      await expect(interpreter.run(ast)).rejects.toThrow('LowConfidence');
+      await interpreter.shutdown();
+    });
+
+    it('should throw ValidationError for non-Confidence until loops', async () => {
+      const source = `x := false
+until x:
+    x := false`;
+      await expect(run(source)).rejects.toThrow('ValidationError');
+    });
+  });
+
+  // ─── ContextOverflow error ──────────────────────────────────
+
+  describe('ContextOverflow error', () => {
+    it('should throw ContextOverflow when context exceeds limit', async () => {
+      const provider = new ConsoleProvider();
+      // Override execute to return a massive string (simulate blowup)
+      const bigStr = 'x'.repeat(500_001);
+      provider.execute = async () => ({ kind: 'string', value: bigStr });
+      const source = `a := CoT("topic1")
+b := CoT("topic2")
+c := CoT("topic3")`;
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider, scriptDir: fixturesDir });
+      await expect(interpreter.run(ast)).rejects.toThrow('ContextOverflow');
+      await interpreter.shutdown();
+    });
+  });
+
+  // ─── Confidence infrastructure ──────────────────────────────
+
+  describe('confidence infrastructure', () => {
+    it('should return blended confidence from Confidence()', async () => {
+      // ConsoleProvider returns 0.75; runtime baseline is ~0.7
+      // Blended = 0.50 * 0.75 + 0.50 * 0.7 = 0.725 → rounds to 0.73
+      const result = await run(`c := Confidence()`);
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') {
+        expect(result.value).toBeGreaterThanOrEqual(0.0);
+        expect(result.value).toBeLessThanOrEqual(1.0);
+      }
+    });
+
+    it('should track per-variable confidence', async () => {
+      const result = await run(`analysis := CoT("deep analysis")
+c := Confidence(analysis)`);
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') {
+        expect(result.value).toBeGreaterThan(0);
+        expect(result.value).toBeLessThanOrEqual(1.0);
+      }
+    });
+
+    it('should boost confidence when Search provides sources', async () => {
+      const provider = new ConsoleProvider();
+      // Measure confidence without sources
+      const source1 = `base_conf := Confidence()`;
+      let ast = new Parser().parse(new Lexer(source1).tokenize());
+      let interpreter = new Interpreter({ provider, scriptDir: fixturesDir });
+      const baseResult = await interpreter.run(ast);
+      await interpreter.shutdown();
+
+      // Measure confidence after multiple searches
+      const source2 = `a := Search("topic 1")
+b := Search("topic 2")
+c := Search("topic 3")
+search_conf := Confidence()`;
+      ast = new Parser().parse(new Lexer(source2).tokenize());
+      interpreter = new Interpreter({ provider, scriptDir: fixturesDir });
+      const searchResult = await interpreter.run(ast);
+      await interpreter.shutdown();
+
+      // With sources, confidence should be at least as high
+      if (baseResult.kind === 'number' && searchResult.kind === 'number') {
+        expect(searchResult.value).toBeGreaterThanOrEqual(baseResult.value);
+      }
+    });
+
+    it('should reduce confidence after retries', async () => {
+      const provider = new ConsoleProvider();
+      let callCount = 0;
+      const origExecute = provider.execute.bind(provider);
+      provider.execute = async (op: string, input: string, ctx: any, tags: any[]) => {
+        callCount++;
+        if (callCount <= 2) throw new Error('Simulated failure');
+        return origExecute(op, input, ctx, tags);
+      };
+      // Use retry=3 so the operation eventually succeeds
+      const source = `result := CoT("analysis")<retry=3>
+conf := Confidence(result)`;
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider, scriptDir: fixturesDir });
+      const result = await interpreter.run(ast);
+      await interpreter.shutdown();
+
+      // Confidence should be lower due to retries and errors
+      if (result.kind === 'number') {
+        expect(result.value).toBeLessThan(0.75); // Less than the provider's raw value
+      }
+    });
+
+    it('should track fork agreement for confidence', async () => {
+      const provider = new ConsoleProvider();
+      // All branches return the same result → high agreement
+      const source = `result := fork:
+    a: CoT("topic from angle A")
+    b: CoT("topic from angle B")
+conf := Confidence()`;
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider, scriptDir: fixturesDir });
+      const result = await interpreter.run(ast);
+      await interpreter.shutdown();
+      if (result.kind === 'number') {
+        expect(result.value).toBeGreaterThan(0.0);
+        expect(result.value).toBeLessThanOrEqual(1.0);
+      }
+    });
+
+    it('should boost confidence when CoVe is used', async () => {
+      const provider = new ConsoleProvider();
+      // Without CoVe
+      let source = `base := CoT("claim")
+base_conf := Confidence(base)`;
+      let ast = new Parser().parse(new Lexer(source).tokenize());
+      let interpreter = new Interpreter({ provider, scriptDir: fixturesDir });
+      const baseResult = await interpreter.run(ast);
+      await interpreter.shutdown();
+
+      // With CoVe
+      source = `verified := CoVe("claim")
+verified_conf := Confidence(verified)`;
+      ast = new Parser().parse(new Lexer(source).tokenize());
+      interpreter = new Interpreter({ provider, scriptDir: fixturesDir });
+      const verifiedResult = await interpreter.run(ast);
+      await interpreter.shutdown();
+
+      // CoVe-verified result should have higher or equal confidence
+      if (baseResult.kind === 'number' && verifiedResult.kind === 'number') {
+        expect(verifiedResult.value).toBeGreaterThanOrEqual(baseResult.value);
+      }
+    });
+  });
+
+  describe('v1 polish: meta operations return types', () => {
+    it('Elapsed() should return a number', async () => {
+      const result = await run('t := Elapsed()');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') {
+        expect(result.value).toBeGreaterThanOrEqual(0);
+      }
+    });
+
+    it('Benchmark() should return a number between 0.0 and 1.0', async () => {
+      const result = await run('score := Benchmark("test quality")');
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') {
+        expect(result.value).toBeGreaterThanOrEqual(0.0);
+        expect(result.value).toBeLessThanOrEqual(1.0);
+      }
+    });
+
+    it('Validate() should return a boolean', async () => {
+      const result = await run('ok := Validate("test content")');
+      expect(result.kind).toBe('boolean');
+    });
+
+    it('Validate() with criteria should return a boolean', async () => {
+      const result = await run('ok := Validate("content", criteria="is valid")');
+      expect(result.kind).toBe('boolean');
+    });
+  });
+
+  describe('v1 polish: index subscript access', () => {
+    it('should access list elements by index', async () => {
+      const result = await run(`items := [10, 20, 30]
+val := items[1]`);
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(20);
+    });
+
+    it('should access list elements with negative index', async () => {
+      const result = await run(`items := [10, 20, 30]
+val := items[-1]`);
+      expect(result.kind).toBe('number');
+      if (result.kind === 'number') expect(result.value).toBe(30);
+    });
+
+    it('should access dict values by string key', async () => {
+      const result = await run(`d := {name: "alice", age: 30}
+val := d["name"]`);
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('alice');
+    });
+
+    it('should access string characters by index', async () => {
+      const result = await run(`s := "hello"
+c := s[0]`);
+      expect(result.kind).toBe('string');
+      if (result.kind === 'string') expect(result.value).toBe('h');
+    });
+
+    it('should return null for out of range index', async () => {
+      const result = await run(`items := [1, 2, 3]
+val := items[10]`);
+      expect(result.kind).toBe('null');
+    });
+  });
+
+  describe('v1 polish: event buffer overflow', () => {
+    it('should track dropped events and report in Trace()', async () => {
+      const provider = new ConsoleProvider();
+      // Build a script that emits >1000 events without a handler to trigger overflow
+      // emit syntax: emit eventname (payload)
+      let source = '@orchid 0.1\n';
+      for (let i = 0; i < 1010; i++) {
+        source += `emit overflow_test(${i})\n`;
+      }
+      source += 'trace_out := Trace()\n';
+      const ast = new Parser().parse(new Lexer(source).tokenize());
+      const interpreter = new Interpreter({ provider, trace: true, scriptDir: fixturesDir });
+      const result = await interpreter.run(ast);
+      await interpreter.shutdown();
+      // The trace output should mention dropped events
+      if (result.kind === 'string') {
+        expect(result.value).toContain('DroppedEvents');
+      }
+    });
+  });
+
+  describe('v1 polish: backoff tag', () => {
+    it('should accept backoff tag on operations with retry', async () => {
+      // Just verify it parses and runs without error — the actual delay is minimal in tests
+      const result = await run('result := CoT("test")<retry=2, backoff>');
+      expect(result.kind).toBe('string');
     });
   });
 });

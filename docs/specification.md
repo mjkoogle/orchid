@@ -28,13 +28,13 @@ sources := fork:
     academic: Search("quantum computing breakthroughs 2024")
     industry: Search("quantum computing commercial applications")
 
-vetted := CoVe(sources)                           # verify claims against evidence
-analysis := CoT(vetted)<deep>                      # chain-of-thought reasoning
+vetted := CoVe(sources)                              # verify claims against evidence
+analysis := CoT(vetted)<deep>                        # chain-of-thought reasoning
 
 if Confidence(analysis) > 0.7:
-    Formal(analysis)<cite>                         # high confidence → rigorous report
+    Formal(analysis)<cite>                           # high confidence → rigorous report
 else:
-    ELI5(analysis) + Explain("uncertainty areas")  # low confidence → be transparent
+    ELI5(analysis) + Explain("uncertainty areas")    # low confidence → be transparent
 ```
 
 Read it aloud. You don't need to be a programmer to understand what this agent will do: search two source categories in parallel, fact-check the results, think deeply about them, then choose an output format based on how confident it is. That's the point.
@@ -94,7 +94,7 @@ The underscore `_` refers to the output of the most recent operation, similar to
 
 ```orchid
 Search("renewable energy trends")
-CoT("summarize key findings from: $_")   # explicit reference
+CoT("summarize key findings from: $_")    # explicit reference
 CoVe                                      # implicit: operates on _
 ELI5                                      # implicit: operates on _
 ```
@@ -105,7 +105,7 @@ ELI5                                      # implicit: operates on _
 
 ### 2.1 The Walrus Operator
 
-Orchid uses `:=` for assignment, borrowed from Python's walrus operator. This signals that assignment is a *binding* of a name to an agent output, not a traditional variable store.
+Orchid uses `:=` for assignment, borrowed from Python's walrus operator. This signals that assignment is a naming of an agent output, not a traditional variable store.
 
 ```orchid
 results := Search("climate policy 2024")
@@ -131,6 +131,22 @@ sources := ["arxiv", "pubmed", "semantic_scholar"]
 weights := {relevance: 0.7, recency: 0.3}
 ```
 
+### 2.4 Index Access
+
+List, dict, and string values support subscript access with brackets. Negative indices count from the end. Out-of-range access returns `null`.
+
+```orchid
+results := [10, 20, 30]
+first := results[0]                     # 10
+last := results[-1]                     # 30
+
+config := {model: "claude", temp: 0.7}
+name := config["model"]                 # "claude"
+
+greeting := "hello"
+ch := greeting[0]                       # "h"
+```
+
 ---
 
 ## 3. Blocks and Scope
@@ -139,7 +155,7 @@ weights := {relevance: 0.7, recency: 0.3}
 
 Triple hash marks (`###`) define atomic execution blocks. Everything inside executes as a single, uninterruptible train of thought with full context maintained. If any unhandled error occurs inside, the entire block rolls back.
 
-Variables assigned inside an atomic block **are visible after the block closes**. The block controls execution atomicity, not variable scope. Think of it as a transaction: either all bindings commit or none do.
+Variables assigned inside an atomic block **are visible after the block closes**. The block controls execution atomicity, not variable scope. Think of it as a transaction: either all assignments commit or none do.
 
 ```orchid
 ###
@@ -240,21 +256,68 @@ else:
 
 ## 4. Operators
 
+### 4.0 Operator Reference
+
+#### Composition Operators
+
 | Operator | Name        | Description                                          | Example                             |
 |----------|-------------|------------------------------------------------------|-------------------------------------|
-| `:=`     | Bind        | Assign operation output to a name                    | `x := Search("topic")`             |
-| `+`      | Merge       | Combine two contexts/outputs into one                | `full := research + analysis`       |
+| `:=`     | Assign      | Assign operation output to a name                    | `x := Search("topic")`             |
+| `+=`     | Append      | Merge a value into an existing variable              | `report += Creative("new angle")`   |
+| `+`      | Add / Merge | Numeric addition; semantic synthesis for strings (LLM); concatenation for lists; merge for dicts | `full := research + analysis` |
 | `\|`     | Alternative | Try left; on failure or low confidence, try right    | `result := Search(a) \| Search(b)` |
 | `>>`     | Pipe        | Pass left output as right input                      | `Search("topic") >> CoT >> ELI5`   |
 
-### 4.1 Merge Semantics
+#### Arithmetic Operators
 
-The `+` operator performs context-aware merging. The agent synthesizes rather than concatenates. Exact merge behavior is implementation-defined; runtimes should document their strategy.
+| Operator | Name        | Description                                          | Example                             |
+|----------|-------------|------------------------------------------------------|-------------------------------------|
+| `*`      | Multiply    | Numeric multiplication; string concatenation         | `area := width * height`           |
+| `/`      | Divide      | Numeric division; literal string removal             | `clean := raw / "unwanted text"`   |
+| `-`      | Subtract    | Numeric subtraction; semantic string subtraction (LLM) | `trimmed := report - "methodology"` |
+
+#### Comparison Operators
+
+| Operator | Name                | Description                              | Example                       |
+|----------|---------------------|------------------------------------------|-------------------------------|
+| `==`     | Equal               | Test equality                            | `if status == "ready":`       |
+| `!=`     | Not Equal           | Test inequality                          | `if error != null:`           |
+| `>`      | Greater Than        | Numeric comparison                       | `if Confidence() > 0.8:`     |
+| `<`      | Less Than           | Numeric comparison                       | `if score < threshold:`      |
+| `>=`     | Greater or Equal    | Numeric comparison                       | `if count >= 10:`            |
+| `<=`     | Less or Equal       | Numeric comparison                       | `if risk <= 0.3:`            |
+
+#### Logical Operators
+
+| Operator | Name  | Description                                    | Example                              |
+|----------|-------|------------------------------------------------|--------------------------------------|
+| `and`    | And   | Short-circuit logical AND                      | `if ready and valid:`                |
+| `or`     | Or    | Short-circuit logical OR                       | `if cached or available:`            |
+| `not`    | Not   | Logical negation                               | `if not done:`                       |
+
+#### Containment Operator
+
+| Operator | Name  | Description                                    | Example                              |
+|----------|-------|------------------------------------------------|--------------------------------------|
+| `in`     | In    | Test membership in list, string, or dict       | `if "postgres" in available:`        |
+
+### 4.1 Add / Merge Semantics
+
+The `+` operator has dual behavior depending on operand types. For numbers, it performs standard arithmetic addition. For strings and mixed types, it performs **semantic synthesis via the LLM** — producing an integrated combination rather than simple concatenation. For collections, it performs structural merging:
+
+- **Numbers:** arithmetic addition (`3 + 4` → `7`)
+- **Strings:** semantic synthesis via LLM — the agent combines both inputs into a unified result, resolving contradictions and preserving key points
+- **Lists:** concatenation (`[1,2] + [3,4]` → `[1,2,3,4]`)
+- **Dicts:** merge (right overwrites duplicate keys)
+- **Mixed types:** semantic synthesis via LLM
+
+Use `*` for literal string concatenation and `+` for intelligent synthesis.
 
 ```orchid
 market := CoT("market analysis")
 technical := CoT("technical analysis")
-report := market + technical   # Agent synthesizes both perspectives
+report := market + technical    # Agent synthesizes both perspectives
+total := subtotal + tax         # Arithmetic addition
 ```
 
 ### 4.2 Alternative Semantics
@@ -265,63 +328,61 @@ The `|` operator provides fallback chains. Each alternative is tried left-to-rig
 data := API:Fetch(url) | Cache:Load(key) | Search("$query")<best_effort>
 ```
 
----
+### 4.3 Arithmetic String Semantics
 
-## 5. Tags (Behavior Modifiers)
+The arithmetic operators follow a clean symmetry for strings: `*` and `/` are **literal** operations (direct concatenation and removal), while `+` and `-` are **semantic** operations (LLM-powered synthesis and subtraction).
 
-Tags modify the execution behavior of any operation. They are appended inline using angle brackets.
+**Add (`+`):** For numbers, standard addition. For strings, semantic synthesis — the LLM combines both inputs into a coherent, integrated result rather than simply concatenating them.
 
 ```orchid
-Operation("args")<tag>
-Operation("args")<tag1, tag2>
+report := market_analysis + technical_analysis    # Agent synthesizes both perspectives
+total := subtotal + tax                           # Arithmetic addition
 ```
 
-### 5.1 Execution Tags
+**Multiply (`*`):** For numbers, standard multiplication. For strings, direct concatenation (no separator). Use `*` when you want literal joining; use `+` when you want the agent to synthesize.
 
-| Tag              | Description                                                              |
-|------------------|--------------------------------------------------------------------------|
-| `<urgent>`       | Prioritize speed over thoroughness. Skip non-essential verification.     |
-| `<quick>`        | Abbreviated reasoning. Concise result, no deep analysis.                 |
-| `<deep>`         | Exhaustive analysis. Explore edge cases, consider multiple framings.     |
-| `<best_effort>`  | Accept partial or degraded results rather than failing.                  |
-| `<tentative>`    | Low confidence acceptable. Mark output as provisional.                   |
-| `<strict>`       | Zero tolerance for ambiguity. Fail rather than assume.                   |
+```orchid
+greeting := "Hello, " * name     # "Hello, Alice"
+area := width * height           # 50
+```
 
-### 5.2 Reliability Tags
+**Divide (`/`):** For numbers, standard division. For strings, literal removal — all occurrences of the right operand are removed from the left.
 
-| Tag              | Description                                                              |
-|------------------|--------------------------------------------------------------------------|
-| `<retry>`        | Retry on failure. `<retry=3>` for max attempts, `<retry=3, backoff>`.   |
-| `<timeout=Ns>`   | Abort and return partial results after N seconds.                        |
-| `<idempotent>`   | Safe to re-execute. Runtime may deduplicate calls.                       |
-| `<cached>`       | Use cached results if available and fresh.                               |
-| `<fallback=X>`   | On failure, substitute value X.                                          |
+```orchid
+clean := "the quick the fox" / "the "    # "quick fox"
+half := total / 2                        # 50.0
+```
 
-### 5.3 Output Tags
+**Subtract (`-`):** For numbers, standard subtraction. For strings, semantic subtraction — the LLM rewrites the left operand with the concepts/content described by the right operand removed, preserving coherence and flow.
 
-| Tag              | Description                                                              |
-|------------------|--------------------------------------------------------------------------|
-| `<private>`      | Suppress from logs, traces, and persisted output.                        |
-| `<silent>`       | Execute without emitting visible output. Side effects still apply.       |
-| `<verbose>`      | Include full reasoning trace in output, not just the conclusion.         |
-| `<raw>`          | Return unprocessed output. Skip default formatting/summarization.        |
-| `<cite>`         | Require source attribution for all claims.                               |
+```orchid
+accessible := technical_report - "jargon and acronyms"
+concise := draft - "redundant examples"
+count := total - used
+```
 
-### 5.4 Composition Tags
+### 4.4 Operator Precedence
 
-| Tag              | Description                                                              |
-|------------------|--------------------------------------------------------------------------|
-| `<append>`       | Add to existing context rather than replacing it.                        |
-| `<isolated>`     | Execute without access to surrounding context. Clean-room reasoning.     |
-| `<frozen>`       | Lock this output. Downstream operations cannot modify it.                |
+From lowest to highest precedence:
+
+1. `>>` (pipe)
+2. `|` (alternative)
+3. `or` (logical or)
+4. `and` (logical and)
+5. `not` (logical not)
+6. `==`, `!=`, `>`, `<`, `>=`, `<=` (comparison)
+7. `in` (containment)
+8. `+` (merge)
+9. `*`, `/`, `-` (arithmetic)
+10. Unary `-` (negation)
 
 ---
 
-## 6. Reasoning Macros
+## 5. Reasoning Macros
 
 Reasoning macros are named cognitive operations that shape *how the agent reasons*. Unlike functions that transform data, macros encode reusable patterns of thought.
 
-### 6.1 Analysis Macros
+### 5.1 Analysis Macros
 
 | Macro              | Signature                     | Description                                             |
 |--------------------|-------------------------------|---------------------------------------------------------|
@@ -335,7 +396,7 @@ Reasoning macros are named cognitive operations that shape *how the agent reason
 | `Spatial`          | `Spatial(context)`            | Geographic or visual-spatial reasoning.                 |
 | `Quantify`         | `Quantify(claim)`             | Attach numbers, ranges, or magnitudes to claims.        |
 
-### 6.2 Critique Macros
+### 5.2 Critique Macros
 
 | Macro              | Signature                     | Description                                             |
 |--------------------|-------------------------------|---------------------------------------------------------|
@@ -344,9 +405,9 @@ Reasoning macros are named cognitive operations that shape *how the agent reason
 | `Steelman`         | `Steelman(argument)`          | Construct the strongest version of an argument.         |
 | `DevilsAdvocate`   | `DevilsAdvocate(position)`    | Argue against a position regardless of agreement.       |
 | `Counterfactual`   | `Counterfactual(scenario)`    | What-if analysis. Explore alternate outcomes.           |
-| `Validate`         | `Validate(output, criteria)`  | Check output against explicit acceptance criteria.      |
+| `Validate`         | `Validate(output, criteria)`  | Check output against explicit acceptance criteria. Returns boolean. |
 
-### 6.3 Synthesis Macros
+### 5.3 Synthesis Macros
 
 | Macro              | Signature                     | Description                                             |
 |--------------------|-------------------------------|---------------------------------------------------------|
@@ -357,7 +418,7 @@ Reasoning macros are named cognitive operations that shape *how the agent reason
 | `Reconcile`        | `Reconcile(conflicts)`        | Resolve contradictions between sources or analyses.     |
 | `Prioritize`       | `Prioritize(items, criteria)` | Rank items by importance given criteria.                |
 
-### 6.4 Communication Macros
+### 5.4 Communication Macros
 
 | Macro              | Signature                     | Description                                             |
 |--------------------|-------------------------------|---------------------------------------------------------|
@@ -368,7 +429,7 @@ Reasoning macros are named cognitive operations that shape *how the agent reason
 | `Narrate`          | `Narrate(data)`               | Transform data/analysis into narrative form.            |
 | `Translate`        | `Translate(content, audience)`| Adapt content for a specific audience.                  |
 
-### 6.5 Generative Macros
+### 5.5 Generative Macros
 
 | Macro              | Signature                     | Description                                             |
 |--------------------|-------------------------------|---------------------------------------------------------|
@@ -378,18 +439,48 @@ Reasoning macros are named cognitive operations that shape *how the agent reason
 | `Ground`           | `Ground(abstraction)`         | Connect abstract concepts to concrete examples.         |
 | `Reframe`          | `Reframe(problem)`            | Approach from a fundamentally different angle.          |
 
-### 6.6 Custom Macro Definition
+### 5.6 Bracket-Count Syntax
+
+Several macros accept an optional count parameter via bracket notation: `Operation[n](args)`. The integer `n` controls how many results, viewpoints, or iterations the macro produces.
+
+```orchid
+# Debate with 3 viewpoints
+perspectives := Debate[3]("should we adopt microservices?")
+
+# Brainstorm 10 ideas
+ideas := Brainstorm[10]("ways to reduce API latency")
+
+# Debate with 2 sides (default if unspecified depends on runtime)
+pros_cons := Debate[2]("remote work vs office work")
+```
+
+The bracket-count is syntactically distinct from tags. `Brainstorm[10]("topic")` sets the *quantity* of outputs, while `Brainstorm("topic")<deep>` sets the *quality* of reasoning. They compose naturally:
+
+```orchid
+# 10 ideas, each explored thoroughly
+ideas := Brainstorm[10]("reduce latency")<deep>
+```
+
+Macros that support bracket-count:
+
+| Macro        | Default `n` | Behavior                                         |
+|--------------|-------------|--------------------------------------------------|
+| `Debate[n]`  | 2           | Generate n distinct viewpoints, then synthesize.  |
+| `Brainstorm[n]` | 5        | Generate n distinct ideas or approaches.          |
+| `Refine[n]`  | 1           | Run n iterative refinement passes.                |
+
+### 5.7 Custom Macro Definition
 
 Macros extend the standard library with reusable, parameterized cognitive patterns. Tags can be applied at **definition time** (defaults for every invocation) or at **call site** (per-invocation override).
 
 Tag resolution rules:
-- Call-site tags from different categories than definition tags are **additive**. A macro defined `<idempotent>` and called `<private>` gets both.
+- Call-site tags from different categories than definition tags are **additive**. A macro defined `<pure>` and called `<private>` gets both.
 - Call-site tags that conflict with definition tags **override**. A macro defined `<deep>` and called `<quick>` runs as `<quick>`. The caller knows their context best.
 - Definition tags not contradicted by the call site are **inherited**.
 
 ```orchid
 # Definition-time tags set defaults
-macro ThreatModel(system)<idempotent>:
+macro ThreatModel(system)<pure>:
     surface := Decompose("attack surface of $system")
     threats := RedTeam(surface)
     ranked := Prioritize(threats, criteria="likelihood * impact")
@@ -397,8 +488,8 @@ macro ThreatModel(system)<idempotent>:
     return Formal(mitigations)
 
 # Call-site tags augment definition-time tags
-result := ThreatModel(spec)                # inherits <idempotent>
-result := ThreatModel(spec)<deep>          # adds <deep>, keeps <idempotent>
+result := ThreatModel(spec)                 # inherits <pure>
+result := ThreatModel(spec)<deep>           # adds <deep>, keeps <pure>
 result := ThreatModel(spec)<quick, private> # quick pass, suppress from logs
 ```
 
@@ -412,6 +503,69 @@ macro Spitball(problem)<private, tentative>:
 # Caller can override privacy
 keeper := Spitball("how to reduce API latency")<verbose>
 ```
+
+---
+
+## 6. Tags (Behavior Modifiers)
+
+Tags modify the execution behavior of any operation. They are appended inline using angle brackets.
+
+```orchid
+Operation("args")<tag>
+Operation("args")<tag1, tag2>
+```
+
+#### Dynamic Tag Resolution
+
+Tag names can be resolved dynamically from variables using the `$` prefix. If the variable is unset or null, the tag is silently skipped.
+
+```orchid
+mode := "deep"
+CoT("analysis")<$mode>                # equivalent to CoT("analysis")<deep>
+
+tags := "strict"
+Validate(output)<$tags, cite>         # mixes dynamic and static tags
+```
+
+### 6.1 Execution Tags
+
+| Tag              | Description                                                              |
+|------------------|--------------------------------------------------------------------------|
+| `<urgent>`       | Prioritize speed over thoroughness. Skip non-essential verification.     |
+| `<quick>`        | Abbreviated reasoning. Concise result, no deep analysis.                 |
+| `<deep>`         | Exhaustive analysis. Explore edge cases, consider multiple framings.     |
+| `<best_effort>`  | Accept partial or degraded results rather than failing.                  |
+| `<tentative>`    | Low confidence acceptable. Mark output as provisional.                   |
+| `<strict>`       | Zero tolerance for ambiguity. Fail rather than assume.                   |
+
+### 6.2 Reliability Tags
+
+| Tag              | Description                                                              |
+|------------------|--------------------------------------------------------------------------|
+| `<retry>`        | Retry on failure. `<retry=3>` for max attempts.                         |
+| `<backoff>`      | Use with `<retry>`. Exponential delay between attempts (1s, 2s, 4s... capped at 30s). |
+| `<timeout=Ns>`   | Abort and return partial results after N seconds.                        |
+| `<pure>`         | No side effects. Safe to re-execute; runtime may cache and deduplicate.  |
+| `<cached>`       | Use cached results if available and fresh.                               |
+| `<fallback=X>`   | On failure, substitute value X.                                          |
+
+### 6.3 Output Tags
+
+| Tag              | Description                                                              |
+|------------------|--------------------------------------------------------------------------|
+| `<private>`      | Suppress from logs, traces, and persisted output.                        |
+| `<silent>`       | Execute without emitting visible output. Side effects still apply.       |
+| `<verbose>`      | Include full reasoning trace in output, not just the conclusion.         |
+| `<raw>`          | Return unprocessed output. Skip default formatting/summarization.        |
+| `<cite>`         | Require source attribution for all claims.                               |
+
+### 6.4 Composition Tags
+
+| Tag              | Description                                                              |
+|------------------|--------------------------------------------------------------------------|
+| `<append>`       | Add to existing context rather than replacing it.                        |
+| `<isolated>`     | Execute without access to surrounding context. Clean-room reasoning.     |
+| `<frozen>`       | Lock this output. Downstream operations cannot modify it.                |
 
 ---
 
@@ -508,13 +662,14 @@ Meta operations provide introspection and control over execution.
 |---------------------|----------------------------------|----------------------------------------------------------|
 | `Explain`           | `Explain(step)`                  | Justify reasoning for a specific step or decision.       |
 | `Confidence`        | `Confidence(scope?)`             | Self-assess certainty (0.0-1.0). Optional scope.        |
-| `Benchmark`         | `Benchmark(output, metric)`      | Evaluate output quality against named criteria.          |
+| `Benchmark`         | `Benchmark(output, metric)`      | Evaluate output quality against named criteria (returns 0.0-1.0). |
 | `Trace`             | `Trace(depth?)`                  | Emit execution history. Depth controls granularity.      |
 | `Checkpoint`        | `Checkpoint(label?)`             | Save current agent state for potential rollback.         |
 | `Rollback`          | `Rollback(target)`               | Revert to a checkpoint by label or step count.           |
 | `Reflect`           | `Reflect(process)`               | Meta-cognitive review of the agent's own approach.       |
 | `Cost`              | `Cost()`                         | Report estimated token/compute cost so far.              |
-| `Elapsed`           | `Elapsed()`                      | Wall-clock time since execution began.                   |
+| `Elapsed`           | `Elapsed()`                      | Wall-clock time since execution began (returns ms).      |
+| `Save`              | `Save(content, path?)`           | Write content to file at path, or stdout if no path.     |
 
 ```orchid
 Checkpoint("pre_analysis")
@@ -569,7 +724,7 @@ Orchid uses a hybrid confidence model. The agent proposes a confidence score bas
 - Data freshness (cached results degrade confidence over time)
 - Error history (retries and fallbacks in the current scope lower confidence)
 
-The final `Confidence()` value is a weighted blend. Runtimes must document their weighting strategy. When called with a scope argument, e.g. `Confidence(analysis)`, only signals relevant to that specific binding are considered.
+The final `Confidence()` value is a weighted blend. Runtimes must document their weighting strategy. When called with a scope argument, e.g. `Confidence(analysis)`, only signals relevant to that specific variable are considered.
 
 ```orchid
 # Confidence is useful but imprecise. Treat it as a heuristic, not a guarantee.
@@ -596,7 +751,7 @@ The key differences between the three extension mechanisms:
 
 | Mechanism | What it is | Syntax | Scope |
 |-----------|-----------|--------|-------|
-| `import`  | Orchid code reuse | `import path as name` | Merges bindings into current scope |
+| `import`  | Orchid code reuse | `import path as name` | Merges definitions into current scope |
 | `Use MCP` | External tool server | `Use MCP("name")` | Namespaced, runs out-of-process |
 | `Use Plugin` | Runtime capability | `Use Plugin("name")` | Namespaced, runs in-process with provider access |
 
@@ -874,7 +1029,7 @@ Every operation executes within an implicit **context window**: the accumulated 
 | **Order**             | Sequential lines execute in order within a scope.                  |
 | **Atomicity**         | `### ... ###` blocks complete fully or roll back entirely.         |
 | **Isolation**         | Fork branches do not observe each other's intermediate states.     |
-| **Idempotency**       | Operations tagged `<idempotent>` can be safely retried by runtime. |
+| **Purity**            | Operations tagged `<pure>` can be safely cached and retried by runtime. |
 | **Graceful failure**  | `<best_effort>` operations never halt the pipeline.                |
 
 ### 11.3 Runtime Responsibilities
@@ -954,6 +1109,7 @@ When `<retry=N>` is exhausted:
 - If `<fallback=X>` is present, the operation returns X silently.
 - If `<best_effort>` is tagged, the operation returns the last attempted result with degraded confidence.
 - Otherwise, a `ValidationError` is raised.
+  - If the `until` condition involves `Confidence()`, a `LowConfidence` error is raised instead.
 
 ---
 
@@ -992,7 +1148,7 @@ import macros/threat_model.orch as ThreatModel
 import agents/researcher.orch as Researcher
 ```
 
-**Import resolution:** Paths are relative to the importing file. Runtimes may also support a library path (e.g., `ORCHID_PATH` environment variable) for shared macro collections.
+**Import resolution:** Paths are relative to the importing file. If not found locally, the runtime searches each directory in the `ORCHID_PATH` environment variable (colon-separated on Unix, semicolon-separated on Windows) for shared macro collections.
 
 **What can be imported:** Only top-level `macro` and `agent` definitions are exported from a file. Variables, inline operations, and metadata are private to the defining file.
 
@@ -1210,21 +1366,35 @@ statement      ::= assignment | operation | control | atomic_block
                   | emit_stmt | on_stmt | comment
 
 assignment     ::= (IDENTIFIER | destructure) ':=' expression
+                 | IDENTIFIER '+=' expression
 destructure    ::= '[' IDENTIFIER (',' IDENTIFIER)* ']'
 
-expression     ::= operation | IDENTIFIER | literal | expression operator expression
+expression     ::= pipe_expr
+pipe_expr      ::= alt_expr ('>>' alt_expr)*
+alt_expr       ::= or_expr ('|' or_expr)*
+or_expr        ::= and_expr ('or' and_expr)*
+and_expr       ::= not_expr ('and' not_expr)*
+not_expr       ::= 'not' not_expr | cmp_expr
+cmp_expr       ::= in_expr (cmp_op in_expr)?
+cmp_op         ::= '==' | '!=' | '>' | '<' | '>=' | '<='
+in_expr        ::= merge_expr ('in' merge_expr)?
+merge_expr     ::= arith_expr ('+' arith_expr)*
+arith_expr     ::= unary_expr (('*' | '/' | '-') unary_expr)*
+unary_expr     ::= '-' unary_expr | postfix_expr
+postfix_expr   ::= primary ('.' IDENTIFIER | '(' args? ')' | '[' expression ']')*
+primary        ::= operation | IDENTIFIER | literal | '(' expression ')'
                  | listen_expr | stream_expr
-operation      ::= IDENTIFIER '(' args? ')' tags?
+
+operation      ::= IDENTIFIER count? '(' args? ')' tags?
                |   IDENTIFIER tags?
                |   namespace ':' IDENTIFIER '(' args? ')' tags?
+count          ::= '[' INTEGER ']'
 
 args           ::= arg (',' arg)*
 arg            ::= expression | IDENTIFIER '=' expression
 
 tags           ::= '<' tag (',' tag)* '>'
-tag            ::= IDENTIFIER ('=' value)?
-
-operator       ::= '+' | '|' | '>>'
+tag            ::= IDENTIFIER ('=' value)? | '$' IDENTIFIER
 
 atomic_block   ::= '###' NEWLINE statement* '###'
 
@@ -1326,7 +1496,7 @@ The following macros are available in all Orchid environments without import:
 **Synthesis:** Refine, Consensus, Debate, Synthesize, Reconcile, Prioritize
 **Communication:** ELI5, Formal, Analogize, Socratic, Narrate, Translate
 **Generative:** Creative, Brainstorm, Abstract, Ground, Reframe
-**Meta:** Explain, Confidence, Benchmark, Trace, Checkpoint, Rollback, Reflect, Cost, Elapsed
+**Meta:** Explain, Confidence, Benchmark, Trace, Checkpoint, Rollback, Reflect, Cost, Elapsed, Save
 
 ## Appendix C: Comparison with Existing Approaches
 

@@ -1,0 +1,2 @@
+import "deep/nested_mod" as deep
+mid_value := "from-mid"

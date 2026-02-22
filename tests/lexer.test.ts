@@ -106,6 +106,24 @@ describe('Lexer', () => {
         { type: TokenType.NUMBER, value: '1' },
       ]);
     });
+
+    it('should tokenize arithmetic operators', () => {
+      const tokens = tokenValues('a * b / c - d');
+      expect(tokens.map(t => t.type)).toEqual([
+        TokenType.IDENTIFIER, TokenType.STAR, TokenType.IDENTIFIER,
+        TokenType.SLASH, TokenType.IDENTIFIER, TokenType.MINUS,
+        TokenType.IDENTIFIER,
+      ]);
+    });
+
+    it('should tokenize slash operator', () => {
+      const tokens = tokenValues('x / y');
+      expect(tokens).toEqual([
+        { type: TokenType.IDENTIFIER, value: 'x' },
+        { type: TokenType.SLASH, value: '/' },
+        { type: TokenType.IDENTIFIER, value: 'y' },
+      ]);
+    });
   });
 
   describe('delimiters and punctuation', () => {

@@ -101,7 +101,9 @@ Identify the most impactful variables and how different values would alter outco
 
   Validate: `You are validating output against acceptance criteria.
 Check whether the input meets the standards implied or stated.
-Be specific about what passes, what fails, and what's borderline.`,
+Start your response with either "PASS" or "FAIL" on the first line.
+Then explain what passes, what fails, and what's borderline.
+Only respond with "PASS" if ALL criteria are fully met.`,
 
   // ── Synthesis ──
   Refine: `You are iteratively refining the input.
@@ -180,6 +182,30 @@ Be transparent about the logic, trade-offs, and alternatives considered.`,
 
   Summarize: `Summarize the following concisely. Capture the essential points
 while minimizing length. Preserve the most important details and conclusions.`,
+
+  Benchmark: `You are evaluating the quality of output against a named metric or criteria.
+Score the output on a scale of 0.0 to 1.0 where:
+- 0.0-0.2: Very poor, fails to meet basic standards
+- 0.2-0.4: Below average, significant gaps
+- 0.4-0.6: Acceptable but with notable weaknesses
+- 0.6-0.8: Good, meets most criteria well
+- 0.8-1.0: Excellent, fully meets or exceeds criteria
+Respond with ONLY a single number between 0.0 and 1.0 on the first line.
+Then optionally explain your scoring rationale.`,
+
+  // ── Operators ──
+  Merge: `You are synthesizing two sources of information into a unified output.
+Combine the key points, insights, and conclusions from both sources into a single coherent result.
+Resolve any contradictions. Preserve important details from each source.
+Do not simply concatenate — produce an integrated synthesis.
+Return ONLY the synthesized text, no explanation.`,
+
+  Subtract: `You are performing semantic subtraction. Given an original text and content to remove,
+produce a new version of the original with the specified content, themes, or concepts removed.
+Preserve the remaining content's coherence and flow. Do not simply delete sentences —
+rewrite the text so it reads naturally without the subtracted material.
+If the content to remove is a concept or theme, remove all references and implications of it.
+Return ONLY the resulting text, no explanation.`,
 };
 
 /** Operations that return JSON arrays (parsed into OrchidList) */
@@ -187,7 +213,18 @@ const LIST_OPERATIONS = new Set(['Decompose', 'Brainstorm', 'Classify']);
 
 /** Tag-to-prompt modifiers */
 const TAG_MODIFIERS: Record<string, string> = {
+  // Execution tags
+  urgent: 'Prioritize speed over thoroughness. Skip non-essential verification and elaboration. Get to the answer fast.',
+  quick: 'Provide an abbreviated response. Be concise — no deep analysis, just the key points.',
   deep: 'Be extremely thorough and detailed in your analysis. Leave no stone unturned.',
+  strict: 'Zero tolerance for ambiguity. If anything is uncertain, flag it explicitly rather than assuming. Fail rather than guess.',
+  tentative: 'Low confidence is acceptable. Mark uncertain parts as provisional. Hedging and caveats are fine.',
+  best_effort: 'Do your best with available information. Partial or degraded results are acceptable — do not fail.',
+  // Output tags
+  verbose: 'Include your full reasoning trace in the output, not just the conclusion. Show all intermediate steps.',
+  raw: 'Return your unprocessed output. Do not summarize, format, or restructure. Provide the raw analysis.',
+  cite: 'Require source attribution for all claims. Every factual statement must include where it comes from.',
+  // Style tags
   brief: 'Be as concise as possible. Only the essential points.',
   creative: 'Push for unconventional, creative approaches. Prioritize novelty.',
   formal: 'Use formal, academic language and rigorous structure.',
